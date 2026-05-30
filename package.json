@@ -43,6 +43,7 @@
 		"dev": "vite",
 		"lint": "eslint .",
 		"preview": "npm run build && vite preview",
+		"sample:chaos": "node scripts/generate-chaotic-realtor-data.cjs",
 		"stress": "node scripts/stress-dataready.cjs"
 	},
 	"type": "module"
