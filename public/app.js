@@ -12,6 +12,23 @@ const state = {
   activeView: "table",
 };
 
+const FREE_ROW_LIMIT = 100;
+const PRICING_TIERS = [
+  { id: "preview", label: "Preview", min: 0, max: 100, price: 0, cents: 0 },
+  { id: "single", label: "Single File", min: 101, max: 2500, price: 3, cents: 300 },
+  { id: "large", label: "Large File", min: 2501, max: 15000, price: 7, cents: 700 },
+  { id: "batch", label: "Batch", min: 15001, max: 50000, price: 12, cents: 1200 },
+];
+
+const FILE_RULES = {
+  csv: "Allowed. Best for clean exports and most customer lists.",
+  tsv: "Allowed. Good for tab-separated exports from spreadsheets and databases.",
+  txt: "Allowed if the text has rows and columns separated by commas, tabs, or pipes.",
+  xlsx: "Allowed. The first usable worksheet will be cleaned.",
+  pdf: "Not supported yet. Export the table as CSV or XLSX first.",
+  xls: "Not supported yet. Save the workbook as .xlsx or CSV first.",
+};
+
 const sampleCsv = `Full Name, Email Address, Phone, Signup Date, City, Amount, Notes
  ana   lopez , ANA.LOPEZ@Example.COM , (505) 222-1199, 1/5/26, Albuquerque, $120.00, first order
 Ana Lopez, ana.lopez@example.com, 5052221199, 2026-01-05, Albuquerque, 120, duplicate
@@ -47,6 +64,10 @@ const els = {
   downloadCleanBtn: document.querySelector("#downloadCleanBtn"),
   downloadReportBtn: document.querySelector("#downloadReportBtn"),
   copySummaryBtn: document.querySelector("#copySummaryBtn"),
+  unlockFullBtn: document.querySelector("#unlockFullBtn"),
+  fullFilePrice: document.querySelector("#fullFilePrice"),
+  fullFileStatus: document.querySelector("#fullFileStatus"),
+  fileRulesList: document.querySelector("#fileRulesList"),
   termsCheck: document.querySelector("#termsCheck"),
   analysisTitle: document.querySelector("#analysisTitle"),
   analysisText: document.querySelector("#analysisText"),
@@ -72,6 +93,37 @@ const ruleIds = [
 
 function getRules() {
   return Object.fromEntries(ruleIds.map((id) => [id, document.querySelector(`#${id}`).checked]));
+}
+
+function fileExtension(fileName = "") {
+  return fileName.toLowerCase().split(".").pop() || "";
+}
+
+function isSupportedFile(fileName = "") {
+  return ["csv", "tsv", "txt", "xlsx"].includes(fileExtension(fileName));
+}
+
+function pricingTier(rowCount) {
+  const rows = Number(rowCount) || 0;
+  return PRICING_TIERS.find((tier) => rows >= tier.min && rows <= tier.max) || {
+    id: "enterprise",
+    label: "Custom Batch",
+    min: 50001,
+    max: Infinity,
+    price: 49,
+    cents: 4900,
+  };
+}
+
+function renderFileRules(fileName = state.fileName) {
+  if (!els.fileRulesList) return;
+  const extension = fileExtension(fileName);
+  const ruleText = FILE_RULES[extension] || "Upload CSV, TSV, TXT, or XLSX files. PDF and old .xls files are not supported yet.";
+  els.fileRulesList.innerHTML = [
+    `<li>${ruleText}</li>`,
+    `<li>Free downloads include the first ${FREE_ROW_LIMIT} cleaned rows.</li>`,
+    "<li>Paid tiers are based on cleaned row count, not file type.</li>",
+  ].join("");
 }
 
 function parseDelimited(text) {
@@ -153,6 +205,8 @@ function loadParsedData(parsed, fileName = "Pasted data") {
   els.fileBadge.textContent = `${fileName} loaded`;
   setUploadStatus(`Loaded ${parsed.rows.length.toLocaleString()} rows from ${fileName}.`);
   els.cleanBtn.disabled = parsed.rows.length === 0;
+  renderFileRules(fileName);
+  updatePaymentState();
   updateMetrics();
   showEmptyPreview(false);
   renderRawPreview();
@@ -161,7 +215,11 @@ function loadParsedData(parsed, fileName = "Pasted data") {
 
 async function loadFile(file) {
   setUploadStatus(`Reading ${file.name}...`);
-  const extension = file.name.toLowerCase().split(".").pop();
+  if (!isSupportedFile(file.name)) {
+    renderFileRules(file.name);
+    throw new Error(`${fileExtension(file.name).toUpperCase() || "This"} file type is not supported yet. Use CSV, TSV, TXT, or XLSX.`);
+  }
+  const extension = fileExtension(file.name);
   if (extension === "xlsx") {
     loadParsedData(await parseXlsx(file), file.name);
     return;
@@ -677,6 +735,34 @@ function enableDeliverables(enabled) {
   els.downloadCleanBtn.disabled = !canDownload;
   els.downloadReportBtn.disabled = !canDownload;
   els.copySummaryBtn.disabled = !canDownload;
+  updatePaymentState();
+}
+
+function updatePaymentState(message) {
+  if (!els.fullFilePrice || !els.fullFileStatus || !els.unlockFullBtn) return;
+
+  const rowCount = state.cleanRows.length || state.rawRows.length;
+  if (!rowCount) {
+    els.fullFilePrice.textContent = "Upload a file to price it";
+    els.fullFileStatus.textContent = "CSV, TSV, TXT, and XLSX files are accepted. PDF and old .xls files are not supported yet.";
+    els.unlockFullBtn.textContent = "Unlock full file";
+    els.unlockFullBtn.disabled = true;
+    return;
+  }
+
+  const tier = pricingTier(rowCount);
+  if (tier.id === "preview") {
+    els.fullFilePrice.textContent = "$0 preview";
+    els.fullFileStatus.textContent = `This file has ${rowCount.toLocaleString()} rows, so the full cleaned CSV is included in the free preview.`;
+    els.unlockFullBtn.textContent = "Full file included";
+    els.unlockFullBtn.disabled = true;
+    return;
+  }
+
+  els.fullFilePrice.textContent = `$${tier.price} ${tier.label}`;
+  els.fullFileStatus.textContent = message || `${rowCount.toLocaleString()} cleaned rows. Free download is capped at ${FREE_ROW_LIMIT} rows; checkout unlocks the full cleaned CSV.`;
+  els.unlockFullBtn.textContent = `Unlock full file - $${tier.price}`;
+  els.unlockFullBtn.disabled = !state.cleanRows.length || !els.termsCheck.checked;
 }
 
 function healthAudit() {
@@ -695,6 +781,7 @@ function healthAudit() {
 
 function buildSummary() {
   const score = qualityScore();
+  const deliveredRows = getDeliverableRows();
   const issueCounts = state.issues.reduce((acc, issue) => {
     acc[issue.level] = (acc[issue.level] || 0) + 1;
     return acc;
@@ -703,7 +790,8 @@ function buildSummary() {
   return [
     "DataReady Client Summary",
     `Source: ${state.fileName}`,
-    `Rows delivered: ${state.cleanRows.length}`,
+    `Rows delivered: ${deliveredRows.length}`,
+    `Total cleaned rows: ${state.cleanRows.length}`,
     `Columns delivered: ${state.cleanHeaders.length}`,
     `Empty rows removed: ${state.removedEmptyRows}`,
     `Duplicate rows removed: ${state.removedDuplicates}`,
@@ -712,6 +800,9 @@ function buildSummary() {
     `Errors: ${issueCounts.error || 0}`,
     `Warnings: ${issueCounts.warning || 0}`,
     `Quality score: ${score}%`,
+    state.cleanRows.length > FREE_ROW_LIMIT
+      ? `Free preview includes the first ${FREE_ROW_LIMIT} cleaned rows. Full-file checkout is coming soon.`
+      : "Full cleaned file included in this preview.",
     "",
     "Recommended client note:",
     "I cleaned and standardized your file, removed duplicates/empty rows where selected, and flagged records that may need confirmation.",
@@ -740,6 +831,10 @@ function toCsv(headers, rows) {
     .join("\r\n");
 }
 
+function getDeliverableRows() {
+  return state.cleanRows.slice(0, FREE_ROW_LIMIT);
+}
+
 function downloadFile(name, content, type) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -755,6 +850,7 @@ function downloadFile(name, content, type) {
 function buildPdfReport() {
   const score = qualityScore() ?? 0;
   const health = healthAudit();
+  const deliveredRows = getDeliverableRows();
   const issueCounts = state.issues.reduce((acc, issue) => {
     acc[issue.level] = (acc[issue.level] || 0) + 1;
     return acc;
@@ -765,7 +861,11 @@ function buildPdfReport() {
       title: "Executive Summary",
       lines: [
         `Source file: ${state.fileName || "Untitled upload"}`,
-        `Rows delivered: ${state.cleanRows.length.toLocaleString()}`,
+        `Rows delivered: ${deliveredRows.length.toLocaleString()}`,
+        `Total cleaned rows: ${state.cleanRows.length.toLocaleString()}`,
+        state.cleanRows.length > FREE_ROW_LIMIT
+          ? `Free preview includes the first ${FREE_ROW_LIMIT.toLocaleString()} cleaned rows. Full-file checkout is coming soon.`
+          : "Full cleaned file included in this preview.",
         `Columns delivered: ${state.cleanHeaders.length.toLocaleString()}`,
         `Quality score: ${score}%`,
         `Logged changes: ${state.changeLog.length.toLocaleString()}`,
@@ -954,9 +1054,39 @@ function reset() {
   els.cleanBtn.disabled = true;
   els.termsCheck.checked = false;
   enableDeliverables(false);
+  renderFileRules("");
+  updatePaymentState();
   updateMetrics();
   showEmptyPreview(true);
   updateSummary("No cleaned data yet.");
+}
+
+async function startCheckout() {
+  const rowCount = state.cleanRows.length;
+  const tier = pricingTier(rowCount);
+  if (!rowCount || tier.id === "preview") return;
+
+  els.unlockFullBtn.disabled = true;
+  els.unlockFullBtn.textContent = "Opening checkout...";
+  try {
+    const response = await fetch("/api/create-checkout-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tierId: tier.id,
+        rowCount,
+        fileName: state.fileName || "Uploaded file",
+        successUrl: window.location.href,
+        cancelUrl: window.location.href,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.url) throw new Error(result.error || "Checkout is not ready yet.");
+    window.open(result.url, "_blank", "noopener");
+    updatePaymentState("Checkout opened in a new tab. Keep this tab open so your cleaned file stays available.");
+  } catch (error) {
+    updatePaymentState(`${error.message} Add your Stripe secret key in Cloudflare to activate paid downloads.`);
+  }
 }
 
 els.fileInput.addEventListener("change", async (event) => {
@@ -996,7 +1126,13 @@ els.dropZone.addEventListener("drop", async (event) => {
 
 els.parsePasteBtn.addEventListener("click", () => {
   const text = els.pasteInput.value.trim();
-  if (text) loadData(text, "Pasted data");
+  if (!text) return;
+  try {
+    loadData(text, "Pasted data");
+  } catch (error) {
+    setUploadStatus(`Paste problem: ${error.message}`, "error");
+    updateSummary(`Paste problem: ${error.message}`);
+  }
 });
 
 if (els.loadSampleBtn) {
@@ -1009,6 +1145,7 @@ if (els.loadSampleBtn) {
 els.cleanBtn.addEventListener("click", cleanData);
 els.resetBtn.addEventListener("click", reset);
 els.termsCheck.addEventListener("change", () => enableDeliverables(state.cleanRows.length > 0));
+els.unlockFullBtn.addEventListener("click", startCheckout);
 
 document.querySelectorAll(".segmented button").forEach((button) => {
   button.addEventListener("click", () => {
@@ -1018,7 +1155,7 @@ document.querySelectorAll(".segmented button").forEach((button) => {
 });
 
 els.downloadCleanBtn.addEventListener("click", () => {
-  downloadFile("cleaned-data.csv", toCsv(state.cleanHeaders, state.cleanRows), "text/csv;charset=utf-8");
+  downloadFile("dataready-free-preview.csv", toCsv(state.cleanHeaders, getDeliverableRows()), "text/csv;charset=utf-8");
 });
 
 els.downloadReportBtn.addEventListener("click", () => {

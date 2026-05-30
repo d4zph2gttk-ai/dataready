@@ -232,7 +232,7 @@
           <div class="panel-heading">
             <div>
               <p class="eyebrow">4. Deliver</p>
-              <h3>Download your cleaned CSV and PDF audit report.</h3>
+              <h3>Download the free 100-row preview and PDF audit report.</h3>
             </div>
           </div>
           <label class="terms-check">
@@ -240,9 +240,25 @@
             I have a backup of the original file and reviewed the cleaning report.
           </label>
           <div class="deliver-grid">
-            <button id="downloadCleanBtn" type="button" disabled>Download Clean CSV</button>
+            <button id="downloadCleanBtn" type="button" disabled>Download 100-Row CSV</button>
             <button id="downloadReportBtn" type="button" disabled>Download PDF Report</button>
             <button id="copySummaryBtn" type="button" disabled>Copy Summary</button>
+          </div>
+          <div id="priceTierBox" class="unlock-card" aria-live="polite">
+            <div>
+              <span class="mini-label">Full-file download</span>
+              <strong id="fullFilePrice">Upload a file to price it</strong>
+              <p id="fullFileStatus">CSV, TSV, TXT, and XLSX files are accepted. PDF and old .xls files are not supported yet.</p>
+            </div>
+            <button id="unlockFullBtn" type="button" disabled>Unlock full file</button>
+          </div>
+          <div class="file-rules-card">
+            <span class="mini-label">File rules</span>
+            <ul id="fileRulesList">
+              <li>CSV, TSV, TXT, and XLSX accepted.</li>
+              <li>Free downloads include the first 100 cleaned rows.</li>
+              <li>Paid tiers are based on cleaned row count, not file type.</li>
+            </ul>
           </div>
           <p class="privacy-note">Files are processed locally in your browser and stay on this device.</p>
           <pre id="summaryBox" class="summary-box">No cleaned data yet.</pre>
@@ -260,7 +276,7 @@
           <article class="price-card"><h3>Single File</h3><strong>$3</strong><p>101 - 2,500 rows</p><span class="price-note">Checkout coming soon</span></article>
           <article class="price-card featured"><span class="price-badge">Best Value</span><h3>Large File</h3><strong>$7</strong><p>2,501 - 15,000 rows</p><span class="price-note">Checkout coming soon</span></article>
           <article class="price-card"><h3>Batch</h3><strong>$12</strong><p>15,001 - 50,000 rows</p><span class="price-note">Checkout coming soon</span></article>
-          <article class="price-card"><h3>Reviewed</h3><strong>$29</strong><p>Human review add-on</p><span class="price-note">Manual review option</span></article>
+          <article class="price-card"><h3>Reviewed</h3><strong>$49</strong><p>Human review add-on</p><span class="price-note">Manual review option</span></article>
         </div>
       </section>
 
