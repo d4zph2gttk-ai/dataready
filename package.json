@@ -41,7 +41,8 @@
 		"deploy": "wrangler deploy",
 		"dev": "vite",
 		"lint": "eslint .",
-		"preview": "npm run build && vite preview"
+		"preview": "npm run build && vite preview",
+		"stress": "node scripts/stress-dataready.cjs"
 	},
 	"type": "module"
 }

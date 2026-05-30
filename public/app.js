@@ -32,6 +32,9 @@ const FILE_RULES = {
 };
 
 const PENDING_PAYMENT_KEY = "dataready_pending_checkout";
+const PENDING_PAYMENT_SESSION_KEY = "dataready_pending_checkout_session";
+const PENDING_PAYMENT_DB = "dataready_paid_downloads";
+const PENDING_PAYMENT_STORE = "pending_downloads";
 
 const sampleCsv = `Full Name, Email Address, Phone, Signup Date, City, Amount, Notes
  ana   lopez , ANA.LOPEZ@Example.COM , (505) 222-1199, 1/5/26, Albuquerque, $120.00, first order
@@ -759,9 +762,16 @@ function buildProfiles(columnTypes) {
 
 function qualityScore() {
   if (!state.cleanRows.length) return null;
-  const totalCells = state.cleanRows.length * state.cleanHeaders.length || 1;
-  const penalty = Math.min(95, Math.round((state.issues.length / totalCells) * 100));
-  const duplicateCredit = Math.min(12, state.removedDuplicates * 2);
+  const issueCounts = state.issues.reduce(
+    (counts, issue) => {
+      counts[issue.level] = (counts[issue.level] || 0) + 1;
+      return counts;
+    },
+    { error: 0, warning: 0 },
+  );
+  const weightedIssues = issueCounts.error * 2 + issueCounts.warning;
+  const penalty = Math.min(95, Math.round((weightedIssues / state.cleanRows.length) * 50));
+  const duplicateCredit = Math.min(5, Math.round((state.removedDuplicates / state.cleanRows.length) * 100));
   return Math.max(0, Math.min(100, 100 - penalty + duplicateCredit));
 }
 
@@ -974,7 +984,7 @@ function buildSummary() {
     `Warnings: ${issueCounts.warning || 0}`,
     `Quality score: ${score}%`,
     state.cleanRows.length > FREE_ROW_LIMIT
-      ? `Free preview includes the first ${FREE_ROW_LIMIT} cleaned rows. Full-file checkout is coming soon.`
+      ? `Free preview includes the first ${FREE_ROW_LIMIT} cleaned rows. Checkout unlocks the full cleaned file.`
       : "Full cleaned file included in this preview.",
     "",
     "Recommended client note:",
@@ -1027,10 +1037,33 @@ async function savePendingPayment(sessionId) {
     xlsxBase64: await buildXlsxWorkbookBase64(fileName),
     createdAt: Date.now(),
   };
+  await savePendingPayload(payload);
+}
+
+async function savePendingPayload(payload) {
+  if (window.indexedDB) {
+    const db = await openPendingPaymentDb();
+    await idbRequest(db.transaction(PENDING_PAYMENT_STORE, "readwrite").objectStore(PENDING_PAYMENT_STORE).put(payload));
+    localStorage.setItem(PENDING_PAYMENT_SESSION_KEY, payload.sessionId);
+    localStorage.removeItem(PENDING_PAYMENT_KEY);
+    return;
+  }
+
   localStorage.setItem(PENDING_PAYMENT_KEY, JSON.stringify(payload));
 }
 
-function loadPendingPayment() {
+async function loadPendingPayment(sessionId) {
+  const targetSessionId = sessionId || localStorage.getItem(PENDING_PAYMENT_SESSION_KEY);
+  if (targetSessionId && window.indexedDB) {
+    try {
+      const db = await openPendingPaymentDb();
+      const payload = await idbRequest(db.transaction(PENDING_PAYMENT_STORE, "readonly").objectStore(PENDING_PAYMENT_STORE).get(targetSessionId));
+      if (payload) return payload;
+    } catch {
+      // Fall back to the older localStorage handoff below.
+    }
+  }
+
   try {
     const payload = JSON.parse(localStorage.getItem(PENDING_PAYMENT_KEY) || "null");
     if (!payload || Date.now() - Number(payload.createdAt || 0) > 2 * 60 * 60 * 1000) {
@@ -1042,6 +1075,36 @@ function loadPendingPayment() {
     localStorage.removeItem(PENDING_PAYMENT_KEY);
     return null;
   }
+}
+
+async function removePendingPayment(sessionId) {
+  localStorage.removeItem(PENDING_PAYMENT_KEY);
+  localStorage.removeItem(PENDING_PAYMENT_SESSION_KEY);
+  if (!sessionId || !window.indexedDB) return;
+  try {
+    const db = await openPendingPaymentDb();
+    await idbRequest(db.transaction(PENDING_PAYMENT_STORE, "readwrite").objectStore(PENDING_PAYMENT_STORE).delete(sessionId));
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function openPendingPaymentDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(PENDING_PAYMENT_DB, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(PENDING_PAYMENT_STORE, { keyPath: "sessionId" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open browser storage."));
+  });
+}
+
+function idbRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Browser storage request failed."));
+  });
 }
 
 function restoreStateFromPaidDownload(payload) {
@@ -1253,7 +1316,7 @@ function buildPdfReport() {
         `Rows delivered: ${deliveredRows.length.toLocaleString()}`,
         `Total cleaned rows: ${state.cleanRows.length.toLocaleString()}`,
         state.cleanRows.length > FREE_ROW_LIMIT
-          ? `Free preview includes the first ${FREE_ROW_LIMIT.toLocaleString()} cleaned rows. Full-file checkout is coming soon.`
+          ? `Free preview includes the first ${FREE_ROW_LIMIT.toLocaleString()} cleaned rows. Checkout unlocks the full cleaned file.`
           : "Full cleaned file included in this preview.",
         `Columns delivered: ${state.cleanHeaders.length.toLocaleString()}`,
         `Quality score: ${score}%`,
@@ -1493,7 +1556,7 @@ async function restorePaidDownloadFromReturn() {
   const sessionId = params.get("session_id");
   if (params.get("checkout") !== "success" || !sessionId) return;
 
-  const pending = loadPendingPayment();
+  const pending = await loadPendingPayment(sessionId);
   if (!pending || pending.sessionId !== sessionId) {
     updatePaymentState("Payment returned, but the cleaned file was not found on this device. Please clean the file again.");
     return;
@@ -1506,7 +1569,7 @@ async function restorePaidDownloadFromReturn() {
     if (!response.ok || !result.paid) throw new Error(result.error || "Payment was not verified yet.");
     state.paidDownload = pending;
     restoreStateFromPaidDownload(pending);
-    localStorage.removeItem(PENDING_PAYMENT_KEY);
+    await removePendingPayment(sessionId);
     updatePaymentState("Payment verified. Your cleaned Excel workbook should download automatically. If it does not, click Download full Excel.");
     updateSummary(`${pending.summary || buildSummary()}\n\nPayment verified.\nCleaned Excel workbook ready: ${pending.rowCount.toLocaleString()} rows.\nSheet 1: Clean Data. Sheet 2: Review Notes.\nYour download should start automatically. If it does not, click Download full Excel.`);
     els.termsCheck.checked = true;

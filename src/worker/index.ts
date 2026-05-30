@@ -76,14 +76,14 @@ app.post("/api/create-checkout-session", async (c) => {
 });
 
 app.get("/api/verify-checkout-session", async (c) => {
-	const stripeKey = c.env.STRIPE_SECRET_KEY;
-	if (!stripeKey) {
-		return c.json({ error: "Stripe checkout is not configured yet." }, 501);
-	}
-
 	const sessionId = c.req.query("session_id");
 	if (!sessionId || !sessionId.startsWith("cs_")) {
 		return c.json({ error: "Missing checkout session." }, 400);
+	}
+
+	const stripeKey = c.env.STRIPE_SECRET_KEY;
+	if (!stripeKey) {
+		return c.json({ error: "Stripe checkout is not configured yet." }, 501);
 	}
 
 	const response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`, {
