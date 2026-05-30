@@ -1,14 +1,289 @@
 <!doctype html>
 <html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<link rel="icon" type="image/svg+xml" href="/vite.svg" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>Vite + React + TS</title>
-	</head>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DataReady | Excel Data Cleaning & CSV Cleaner</title>
+    <meta
+      name="description"
+      content="Clean messy Excel and CSV files online. Remove duplicates, fix spreadsheet formatting, validate emails and phone numbers, and download a clean CSV with a PDF audit report."
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#home" aria-label="DataReady home">
+        <span class="brand-mark">DR</span>
+        <span>DataReady</span>
+      </a>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="#cleaner">Cleaner</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <a class="nav-cta" href="#load">Clean a file</a>
+    </header>
 
-	<body>
-		<div id="root"></div>
-		<script type="module" src="/src/react-app/main.tsx"></script>
-	</body>
+    <main id="home">
+      <section class="hero-section">
+        <div class="hero-copy">
+          <p class="eyebrow">Excel data cleaning and CSV cleanup</p>
+          <h1>Clean messy Excel and CSV files before they cost you time.</h1>
+          <p>
+            Upload a customer list, CRM export, roster, invoice table, or raw CSV.
+            Fix spreadsheet formatting, remove duplicate rows, validate emails and
+            phone numbers, and download a clean CSV with a PDF audit report.
+          </p>
+          <div class="hero-actions">
+            <a class="primary-link" href="#load">Start cleaning</a>
+          </div>
+          <div class="trust-row" aria-label="Trust highlights">
+            <span>Local processing</span>
+            <span>Change log included</span>
+            <span>Excel + CSV</span>
+          </div>
+        </div>
+
+        <section class="hero-upload-card demo-reel" aria-label="Animated product demo">
+          <div class="demo-browser">
+            <div class="preview-topbar">
+              <span></span><span></span><span></span>
+              <strong>DataReady demo</strong>
+            </div>
+            <div class="demo-stage">
+              <div class="demo-step demo-step-upload">
+                <small>Step 1</small>
+                <h2>Upload messy data</h2>
+                <div class="demo-drop">
+                  <b>really-messy-client-list.csv</b>
+                  <span>565 rows detected</span>
+                </div>
+              </div>
+
+              <div class="demo-step demo-step-clean">
+                <small>Step 2</small>
+                <h2>Clean and validate</h2>
+                <div class="demo-progress"><span></span></div>
+                <p>Removing duplicates, fixing phones, checking emails...</p>
+              </div>
+
+              <div class="demo-step demo-step-review">
+                <small>Step 3</small>
+                <h2>Review every change</h2>
+                <div class="demo-change"><b>Email</b><span>ANA@MAIL.COM</span><em>ana@mail.com</em></div>
+                <div class="demo-change"><b>Phone</b><span>5052221111</span><em>(505) 222-1111</em></div>
+                <div class="demo-change"><b>Date</b><span>13/40/2026</span><em>Needs review</em></div>
+              </div>
+
+              <div class="demo-step demo-step-export">
+                <small>Step 4</small>
+                <h2>Download deliverables</h2>
+                <div class="demo-files">
+                  <span>Clean CSV</span>
+                  <span>PDF Audit Report</span>
+                </div>
+              </div>
+            </div>
+            <div class="demo-controls">
+              <span class="active"></span>
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="proof-strip" aria-label="Supported workflows">
+        <span>Excel files</span>
+        <span>Raw CSV</span>
+        <span>Contact lists</span>
+        <span>Duplicate removal</span>
+        <span>PDF audit</span>
+      </section>
+
+      <section id="cleaner" class="cleaner-shell">
+        <div class="section-intro">
+          <p class="eyebrow">Live Cleaner</p>
+          <h2>Upload, clean, validate, and export your spreadsheet.</h2>
+        </div>
+
+        <section id="load" class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">1. Load Data</p>
+              <h3>Upload an Excel, CSV, TSV, or raw spreadsheet export.</h3>
+            </div>
+            <strong id="fileBadge" class="status-badge">No file loaded</strong>
+            <button id="resetBtn" class="ghost-btn" type="button">Reset</button>
+          </div>
+          <p id="uploadStatus" class="upload-status" role="status">Ready for Excel, CSV, TSV, or pasted data.</p>
+
+          <div class="intake-grid">
+            <label class="drop-zone" for="fileInput" id="dropZone">
+              <input id="fileInput" type="file" accept=".csv,.tsv,.txt,.xlsx" />
+              <span class="upload-icon">+</span>
+              <strong>Choose or drop your spreadsheet file</strong>
+              <small>.xlsx, .csv, .tsv, or text exports from CRMs, forms, banks, and lists.</small>
+            </label>
+
+            <div class="paste-box">
+              <div>
+                <label for="pasteInput">Paste data</label>
+                <p>Use this when copied spreadsheet rows arrive instead of a file upload.</p>
+              </div>
+              <textarea
+                id="pasteInput"
+                spellcheck="false"
+                placeholder="Name, Email, Phone, Amount&#10;ana lopez, ANA@EXAMPLE.COM, (505) 222-1199, $120.00"
+              ></textarea>
+              <button id="parsePasteBtn" type="button">Use Pasted Data</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="clean" class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">2. Cleaning Rules</p>
+              <h3>Pick the fixes and validations that match the job.</h3>
+            </div>
+            <button id="cleanBtn" class="primary-btn" type="button" disabled>Clean Data</button>
+          </div>
+
+          <div class="rule-summary">
+            <div><strong>Clean spreadsheet data</strong><span>Fix spacing, headers, names, phones, emails, and dates.</span></div>
+            <div><strong>Find data quality issues</strong><span>Review duplicates, missing values, invalid emails, and bad dates.</span></div>
+            <div><strong>Export clean files</strong><span>Download a cleaned CSV and PDF data-cleaning report.</span></div>
+          </div>
+
+          <div class="rules-grid">
+            <label><input type="checkbox" id="trimCells" checked /> Trim extra spaces</label>
+            <label><input type="checkbox" id="normalizeHeaders" checked /> Normalize headers</label>
+            <label><input type="checkbox" id="removeEmptyRows" checked /> Remove empty rows</label>
+            <label><input type="checkbox" id="removeDuplicates" checked /> Remove duplicates</label>
+            <label><input type="checkbox" id="formatPhones" checked /> Format phone numbers</label>
+            <label><input type="checkbox" id="formatEmails" checked /> Lowercase emails</label>
+            <label><input type="checkbox" id="formatDates" checked /> Standardize dates</label>
+            <label><input type="checkbox" id="formatNames" checked /> Title-case names</label>
+          </div>
+        </section>
+
+        <section class="metric-strip" aria-label="Data metrics">
+          <div><span id="rowMetric">0</span><p>Rows</p></div>
+          <div><span id="columnMetric">0</span><p>Columns</p></div>
+          <div><span id="issueMetric">0</span><p>Issues</p></div>
+          <div><span id="scoreMetric">--</span><p>Quality score</p></div>
+        </section>
+
+        <section class="analysis-grid" aria-label="Cleaning analysis">
+          <div class="analysis-card success-card">
+            <p class="eyebrow">Cleaning Analysis</p>
+            <h3 id="analysisTitle">Waiting for a file</h3>
+            <p id="analysisText">Upload a spreadsheet, run the cleaner, then review what changed before downloading.</p>
+          </div>
+          <div class="analysis-card health-card">
+            <p class="eyebrow">Health Audit</p>
+            <div class="health-grid">
+              <div><span id="emailHealth">0</span><p>Emails</p></div>
+              <div><span id="phoneHealth">0</span><p>Phones</p></div>
+              <div><span id="dateHealth">0</span><p>Dates</p></div>
+              <div><span id="emptyHealth">0</span><p>Empty</p></div>
+              <div><span id="duplicateHealth">0</span><p>Duplicates</p></div>
+              <div><span id="amountHealth">0</span><p>Amounts</p></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="inspect" class="panel inspect-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">3. Inspect</p>
+              <h3>Preview cleaned spreadsheet data, changes, issues, and column profiles.</h3>
+            </div>
+            <div class="segmented" role="tablist" aria-label="Preview mode">
+              <button class="active" data-view="table" type="button">Table</button>
+              <button data-view="changes" type="button">Changes</button>
+              <button data-view="issues" type="button">Issues</button>
+              <button data-view="profile" type="button">Profile</button>
+            </div>
+          </div>
+
+          <div id="emptyState" class="empty-state">
+            <h3>Load data to start cleaning.</h3>
+            <p>Your preview, issue list, change log, and export controls will appear here.</p>
+          </div>
+
+          <div id="tableView" class="preview-view hidden">
+            <div class="table-wrap"><table id="previewTable"></table></div>
+          </div>
+          <div id="changesView" class="preview-view hidden">
+            <div class="table-wrap"><table id="changesTable"></table></div>
+          </div>
+          <div id="issuesView" class="preview-view hidden">
+            <div id="issuesList" class="issues-list"></div>
+          </div>
+          <div id="profileView" class="preview-view hidden">
+            <div id="profileGrid" class="profile-grid"></div>
+          </div>
+        </section>
+
+        <section id="deliver" class="panel deliver-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">4. Deliver</p>
+              <h3>Download your cleaned CSV and PDF audit report.</h3>
+            </div>
+          </div>
+          <label class="terms-check">
+            <input id="termsCheck" type="checkbox" />
+            I have a backup of the original file and reviewed the cleaning report.
+          </label>
+          <div class="deliver-grid">
+            <button id="downloadCleanBtn" type="button" disabled>Download Clean CSV</button>
+            <button id="downloadReportBtn" type="button" disabled>Download PDF Report</button>
+            <button id="copySummaryBtn" type="button" disabled>Copy Summary</button>
+          </div>
+          <p class="privacy-note">Files are processed locally in your browser and stay on this device.</p>
+          <pre id="summaryBox" class="summary-box">No cleaned data yet.</pre>
+        </section>
+      </section>
+
+      <section id="pricing" class="content-section pricing-section">
+        <div class="pricing-header">
+          <p class="pricing-pill">One-time file cleanup</p>
+          <h2>Simple File Pricing</h2>
+          <p>Example pricing for spreadsheet cleanup, CSV cleaning, and customer-list validation.</p>
+        </div>
+        <div class="pricing-grid">
+          <article class="price-card"><h3>Preview</h3><strong>$0</strong><p>0 - 100 rows</p><a href="#load">Start free preview</a></article>
+          <article class="price-card"><h3>Single File</h3><strong>$3</strong><p>101 - 2,500 rows</p><span class="price-note">Checkout coming soon</span></article>
+          <article class="price-card featured"><span class="price-badge">Best Value</span><h3>Large File</h3><strong>$7</strong><p>2,501 - 15,000 rows</p><span class="price-note">Checkout coming soon</span></article>
+          <article class="price-card"><h3>Batch</h3><strong>$12</strong><p>15,001 - 50,000 rows</p><span class="price-note">Checkout coming soon</span></article>
+          <article class="price-card"><h3>Reviewed</h3><strong>$29</strong><p>Human review add-on</p><span class="price-note">Manual review option</span></article>
+        </div>
+      </section>
+
+      <section id="faq" class="content-section faq-section">
+        <div class="section-intro">
+          <p class="eyebrow">FAQ</p>
+          <h2>Before you clean an Excel or CSV file.</h2>
+        </div>
+        <div class="faq-grid">
+          <article><h3>Does this replace human review?</h3><p>No. It cleans obvious issues and flags risky rows for review.</p></article>
+          <article><h3>Do files leave my computer?</h3><p>Files are processed locally in the browser.</p></article>
+          <article><h3>What files work best?</h3><p>Customer lists, CRM exports, contact lists, rosters, invoices, and raw CSV files.</p></article>
+          <article><h3>What do I download?</h3><p>A cleaned CSV file and a PDF data-cleaning report with metrics, issues, and top changes.</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <strong>DataReady</strong>
+      <span>Spreadsheet cleaning, validation, and client-ready reports.</span>
+    </footer>
+
+    <script src="jszip.min.js"></script>
+    <script src="app.js"></script>
+  </body>
 </html>
