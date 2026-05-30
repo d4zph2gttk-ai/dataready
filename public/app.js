@@ -69,6 +69,7 @@ const els = {
   downloadReportBtn: document.querySelector("#downloadReportBtn"),
   copySummaryBtn: document.querySelector("#copySummaryBtn"),
   downloadFullCsvBtn: document.querySelector("#downloadFullCsvBtn"),
+  downloadAllBtn: document.querySelector("#downloadAllBtn"),
   unlockFullBtn: document.querySelector("#unlockFullBtn"),
   fullFilePrice: document.querySelector("#fullFilePrice"),
   fullFileStatus: document.querySelector("#fullFileStatus"),
@@ -897,6 +898,7 @@ function enableDeliverables(enabled) {
   els.downloadReportBtn.disabled = !canDownload;
   els.copySummaryBtn.disabled = !canDownload;
   els.downloadFullCsvBtn.disabled = !state.paidDownload;
+  els.downloadAllBtn.disabled = !state.paidDownload;
   els.downloadFullCsvBtn.textContent = state.paidDownload ? "Download Full CSV" : "Download Full CSV";
   updatePaymentState();
 }
@@ -1012,6 +1014,15 @@ async function savePendingPayment(sessionId) {
     sessionId,
     fileName,
     rowCount: state.cleanRows.length,
+    headers: state.cleanHeaders,
+    rows: state.cleanRows,
+    issues: state.issues,
+    profiles: state.profiles,
+    reviewNotes: state.reviewNotes,
+    changeLog: state.changeLog,
+    removedDuplicates: state.removedDuplicates,
+    removedEmptyRows: state.removedEmptyRows,
+    summary: buildSummary(),
     csv: toCsv(state.cleanHeaders, state.cleanRows),
     xlsxBase64: await buildXlsxWorkbookBase64(fileName),
     createdAt: Date.now(),
@@ -1031,6 +1042,33 @@ function loadPendingPayment() {
     localStorage.removeItem(PENDING_PAYMENT_KEY);
     return null;
   }
+}
+
+function restoreStateFromPaidDownload(payload) {
+  state.paidDownload = payload;
+
+  if (Array.isArray(payload.headers) && Array.isArray(payload.rows)) {
+    state.cleanHeaders = payload.headers;
+    state.cleanRows = payload.rows;
+  } else if (payload.csv) {
+    const parsed = parseDelimited(payload.csv);
+    state.cleanHeaders = parsed.headers;
+    state.cleanRows = parsed.rows;
+  }
+
+  state.fileName = payload.fileName || state.fileName || "Paid cleanup";
+  state.issues = Array.isArray(payload.issues) ? payload.issues : [];
+  state.profiles = Array.isArray(payload.profiles) ? payload.profiles : buildProfiles(state.cleanHeaders.map(() => "text"));
+  state.reviewNotes = Array.isArray(payload.reviewNotes) ? payload.reviewNotes : [];
+  state.changeLog = Array.isArray(payload.changeLog) ? payload.changeLog : [];
+  state.removedDuplicates = Number(payload.removedDuplicates || 0);
+  state.removedEmptyRows = Number(payload.removedEmptyRows || 0);
+  state.activeView = "table";
+  els.fileBadge.textContent = `${state.fileName} paid`;
+  setUploadStatus(`Payment verified. Restored ${state.cleanRows.length.toLocaleString()} cleaned rows.`);
+  renderActiveView();
+  updateMetrics();
+  updateSummary(payload.summary || buildSummary());
 }
 
 function cleanFileName(name) {
@@ -1137,6 +1175,48 @@ function downloadPaidFile() {
   } catch (error) {
     updatePaymentState(`${error.message} Please re-upload the file and run checkout again in this same browser tab.`);
     updateSummary(`Download problem: ${error.message}\nPlease re-upload the file, clean it again, and run checkout again.`);
+    return false;
+  }
+}
+
+async function downloadAllFiles() {
+  if (!state.paidDownload) {
+    updatePaymentState("Upload and unlock the full file before downloading the complete package.");
+    return false;
+  }
+
+  if (!window.JSZip) {
+    updatePaymentState("Download package is not available. Refresh the app and try again.");
+    return false;
+  }
+
+  const baseName = cleanFileName(state.paidDownload.fileName || state.fileName || "dataready-cleaned").replace(/\.(csv|xlsx|tsv|txt)$/i, "");
+  const zip = new JSZip();
+
+  try {
+    if (state.paidDownload.xlsxBase64) {
+      zip.file(`${baseName}-cleaned-workbook.xlsx`, state.paidDownload.xlsxBase64, { base64: true });
+    } else if (state.paidDownload.csv) {
+      zip.file(`${baseName}-full.csv`, state.paidDownload.csv);
+    } else {
+      throw new Error("The paid cleaned file was not found in this browser session.");
+    }
+
+    if (state.paidDownload.csv) {
+      zip.file(`${baseName}-full.csv`, state.paidDownload.csv);
+    }
+
+    zip.file("dataready-free-preview.csv", toCsv(state.cleanHeaders, getDeliverableRows()));
+    zip.file("client-cleaning-report.pdf", buildPdfReport(), { binary: true });
+    zip.file("dataready-summary.txt", els.summaryBox.textContent || state.paidDownload.summary || buildSummary());
+
+    const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+    downloadBlob(`${baseName}-dataready-deliverables.zip`, blob);
+    updatePaymentState("All customer deliverables are packaged: Excel workbook, CSV, PDF report, preview, and summary.");
+    return true;
+  } catch (error) {
+    updatePaymentState(`${error.message} Please re-upload the file and run checkout again in this same browser tab.`);
+    updateSummary(`Download package problem: ${error.message}\nPlease re-upload the file, clean it again, and run checkout again.`);
     return false;
   }
 }
@@ -1425,9 +1505,10 @@ async function restorePaidDownloadFromReturn() {
     const result = await response.json();
     if (!response.ok || !result.paid) throw new Error(result.error || "Payment was not verified yet.");
     state.paidDownload = pending;
+    restoreStateFromPaidDownload(pending);
     localStorage.removeItem(PENDING_PAYMENT_KEY);
     updatePaymentState("Payment verified. Your cleaned Excel workbook should download automatically. If it does not, click Download full Excel.");
-    updateSummary(`Payment verified.\nCleaned Excel workbook ready: ${pending.rowCount.toLocaleString()} rows.\nSheet 1: Clean Data. Sheet 2: Review Notes.\nYour download should start automatically. If it does not, click Download full Excel.`);
+    updateSummary(`${pending.summary || buildSummary()}\n\nPayment verified.\nCleaned Excel workbook ready: ${pending.rowCount.toLocaleString()} rows.\nSheet 1: Clean Data. Sheet 2: Review Notes.\nYour download should start automatically. If it does not, click Download full Excel.`);
     els.termsCheck.checked = true;
     enableDeliverables(true);
     setTimeout(downloadPaidFile, 300);
@@ -1511,6 +1592,8 @@ els.downloadFullCsvBtn.addEventListener("click", () => {
     downloadFile(`${state.paidDownload.fileName || "dataready-cleaned"}-full.csv`, state.paidDownload.csv, "text/csv;charset=utf-8");
   }
 });
+
+els.downloadAllBtn.addEventListener("click", downloadAllFiles);
 
 els.downloadReportBtn.addEventListener("click", () => {
   downloadFile("client-cleaning-report.pdf", buildPdfReport(), "application/pdf");
