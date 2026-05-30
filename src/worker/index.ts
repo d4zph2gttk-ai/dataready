@@ -41,7 +41,7 @@ app.post("/api/create-checkout-session", async (c) => {
 	}
 
 	const origin = new URL(c.req.url).origin;
-	const successUrl = safeReturnUrl(body?.successUrl, origin);
+	const successUrl = withCheckoutSuccess(safeReturnUrl(body?.successUrl, origin));
 	const cancelUrl = safeReturnUrl(body?.cancelUrl, origin);
 	const fileName = String(body?.fileName || "Uploaded file").slice(0, 80);
 	const params = new URLSearchParams({
@@ -67,12 +67,40 @@ app.post("/api/create-checkout-session", async (c) => {
 		body: params,
 	});
 
-	const result = await response.json() as { url?: string; error?: { message?: string } };
+	const result = await response.json() as { id?: string; url?: string; error?: { message?: string } };
 	if (!response.ok || !result.url) {
 		return c.json({ error: result.error?.message || "Stripe could not create checkout." }, 502);
 	}
 
-	return c.json({ url: result.url });
+	return c.json({ url: result.url, sessionId: result.id });
+});
+
+app.get("/api/verify-checkout-session", async (c) => {
+	const stripeKey = c.env.STRIPE_SECRET_KEY;
+	if (!stripeKey) {
+		return c.json({ error: "Stripe checkout is not configured yet." }, 501);
+	}
+
+	const sessionId = c.req.query("session_id");
+	if (!sessionId || !sessionId.startsWith("cs_")) {
+		return c.json({ error: "Missing checkout session." }, 400);
+	}
+
+	const response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`, {
+		headers: { Authorization: `Bearer ${stripeKey}` },
+	});
+	const result = await response.json() as { payment_status?: string; status?: string; amount_total?: number; metadata?: Record<string, string>; error?: { message?: string } };
+	if (!response.ok) {
+		return c.json({ error: result.error?.message || "Stripe could not verify checkout." }, 502);
+	}
+
+	return c.json({
+		paid: result.payment_status === "paid",
+		status: result.status,
+		amountTotal: result.amount_total,
+		rowCount: result.metadata?.row_count,
+		tier: result.metadata?.tier,
+	});
 });
 
 function safeReturnUrl(value: string | undefined, origin: string) {
@@ -83,6 +111,13 @@ function safeReturnUrl(value: string | undefined, origin: string) {
 	} catch {
 		return origin;
 	}
+}
+
+function withCheckoutSuccess(value: string) {
+	const url = new URL(value);
+	url.searchParams.set("checkout", "success");
+	url.searchParams.set("session_id", "{CHECKOUT_SESSION_ID}");
+	return url.toString();
 }
 
 export default app;

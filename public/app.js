@@ -10,6 +10,7 @@ const state = {
   profiles: [],
   changeLog: [],
   activeView: "table",
+  paidDownload: null,
 };
 
 const FREE_ROW_LIMIT = 100;
@@ -28,6 +29,8 @@ const FILE_RULES = {
   pdf: "Not supported yet. Export the table as CSV or XLSX first.",
   xls: "Not supported yet. Save the workbook as .xlsx or CSV first.",
 };
+
+const PENDING_PAYMENT_KEY = "dataready_pending_checkout";
 
 const sampleCsv = `Full Name, Email Address, Phone, Signup Date, City, Amount, Notes
  ana   lopez , ANA.LOPEZ@Example.COM , (505) 222-1199, 1/5/26, Albuquerque, $120.00, first order
@@ -741,6 +744,14 @@ function enableDeliverables(enabled) {
 function updatePaymentState(message) {
   if (!els.fullFilePrice || !els.fullFileStatus || !els.unlockFullBtn) return;
 
+  if (state.paidDownload) {
+    els.fullFilePrice.textContent = "Payment verified";
+    els.fullFileStatus.textContent = message || `Your full cleaned CSV is ready: ${state.paidDownload.rowCount.toLocaleString()} rows.`;
+    els.unlockFullBtn.textContent = "Download full CSV";
+    els.unlockFullBtn.disabled = false;
+    return;
+  }
+
   const rowCount = state.cleanRows.length || state.rawRows.length;
   if (!rowCount) {
     els.fullFilePrice.textContent = "Upload a file to price it";
@@ -833,6 +844,35 @@ function toCsv(headers, rows) {
 
 function getDeliverableRows() {
   return state.cleanRows.slice(0, FREE_ROW_LIMIT);
+}
+
+function savePendingPayment(sessionId) {
+  const payload = {
+    sessionId,
+    fileName: cleanFileName(state.fileName || "cleaned-data.csv").replace(/\.csv$/i, ""),
+    rowCount: state.cleanRows.length,
+    csv: toCsv(state.cleanHeaders, state.cleanRows),
+    createdAt: Date.now(),
+  };
+  localStorage.setItem(PENDING_PAYMENT_KEY, JSON.stringify(payload));
+}
+
+function loadPendingPayment() {
+  try {
+    const payload = JSON.parse(localStorage.getItem(PENDING_PAYMENT_KEY) || "null");
+    if (!payload || Date.now() - Number(payload.createdAt || 0) > 2 * 60 * 60 * 1000) {
+      localStorage.removeItem(PENDING_PAYMENT_KEY);
+      return null;
+    }
+    return payload;
+  } catch {
+    localStorage.removeItem(PENDING_PAYMENT_KEY);
+    return null;
+  }
+}
+
+function cleanFileName(name) {
+  return String(name || "cleaned-data").replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "cleaned-data";
 }
 
 function downloadFile(name, content, type) {
@@ -1047,6 +1087,7 @@ function reset() {
   state.changeLog = [];
   state.removedDuplicates = 0;
   state.removedEmptyRows = 0;
+  state.paidDownload = null;
   els.fileInput.value = "";
   els.pasteInput.value = "";
   els.fileBadge.textContent = "No file loaded";
@@ -1062,6 +1103,11 @@ function reset() {
 }
 
 async function startCheckout() {
+  if (state.paidDownload) {
+    downloadFile(`${state.paidDownload.fileName || "dataready-full-cleaned"}-full.csv`, state.paidDownload.csv, "text/csv;charset=utf-8");
+    return;
+  }
+
   const rowCount = state.cleanRows.length;
   const tier = pricingTier(rowCount);
   if (!rowCount || tier.id === "preview") return;
@@ -1081,11 +1127,37 @@ async function startCheckout() {
       }),
     });
     const result = await response.json();
-    if (!response.ok || !result.url) throw new Error(result.error || "Checkout is not ready yet.");
-    window.open(result.url, "_blank", "noopener");
-    updatePaymentState("Checkout opened in a new tab. Keep this tab open so your cleaned file stays available.");
+    if (!response.ok || !result.url || !result.sessionId) throw new Error(result.error || "Checkout is not ready yet.");
+    savePendingPayment(result.sessionId);
+    window.location.href = result.url;
   } catch (error) {
     updatePaymentState(`${error.message} Add your Stripe secret key in Cloudflare to activate paid downloads.`);
+  }
+}
+
+async function restorePaidDownloadFromReturn() {
+  const params = new URLSearchParams(window.location.search);
+  const sessionId = params.get("session_id");
+  if (params.get("checkout") !== "success" || !sessionId) return;
+
+  const pending = loadPendingPayment();
+  if (!pending || pending.sessionId !== sessionId) {
+    updatePaymentState("Payment returned, but the cleaned file was not found on this device. Please clean the file again.");
+    return;
+  }
+
+  updatePaymentState("Verifying Stripe payment...");
+  try {
+    const response = await fetch(`/api/verify-checkout-session?session_id=${encodeURIComponent(sessionId)}`);
+    const result = await response.json();
+    if (!response.ok || !result.paid) throw new Error(result.error || "Payment was not verified yet.");
+    state.paidDownload = pending;
+    localStorage.removeItem(PENDING_PAYMENT_KEY);
+    updatePaymentState("Payment verified. Your full cleaned CSV is ready to download.");
+    updateSummary(`Payment verified.\nFull cleaned CSV ready: ${pending.rowCount.toLocaleString()} rows.\nClick Download full CSV.`);
+    window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+  } catch (error) {
+    updatePaymentState(`Payment check failed: ${error.message}`);
   }
 }
 
@@ -1171,3 +1243,4 @@ els.copySummaryBtn.addEventListener("click", async () => {
 });
 
 reset();
+restorePaidDownloadFromReturn();
