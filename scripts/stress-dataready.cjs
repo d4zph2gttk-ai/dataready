@@ -3,7 +3,6 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const assert = require("assert");
-const zlib = require("zlib");
 
 const APP_URL = process.env.DATAREADY_URL || "http://127.0.0.1:4180/";
 const ROOT = path.resolve(__dirname, "..");
@@ -152,6 +151,24 @@ function fileSize(filePath) {
   return fs.statSync(filePath).size;
 }
 
+async function readZipText(zipPath, fileName) {
+  const zip = await readZip(zipPath);
+  const entry = zip.files.get(fileName);
+  assert(entry, `${path.basename(zipPath)} missing ${fileName}`);
+  return entry.toString("utf8");
+}
+
+async function readZip(zipPath) {
+  const bridge = new Function("return import('jszip')");
+  const { default: JSZip } = await bridge();
+  const zip = await JSZip.loadAsync(fs.readFileSync(zipPath));
+  const files = new Map();
+  await Promise.all(Object.keys(zip.files).map(async (name) => {
+    if (!zip.files[name].dir) files.set(name, await zip.files[name].async("nodebuffer"));
+  }));
+  return { files };
+}
+
 async function paidUnlock(page) {
   return page.evaluate(async () => {
     await window.savePendingPayment("stress_session");
@@ -188,10 +205,13 @@ async function runDownloadSuite(page, filePath, label) {
   assert(fileSize(workbook) > 1000, "Excel workbook was empty");
   assert(fileSize(bundle) > 1000, "deliverables zip was empty");
 
-  const zipBytes = fs.readFileSync(bundle);
-  assert(zipBytes.includes(Buffer.from("dataready-free-preview.csv")), "zip missing preview CSV");
-  assert(zipBytes.includes(Buffer.from("client-cleaning-report.pdf")), "zip missing PDF report");
-  assert(zipBytes.includes(Buffer.from("dataready-summary.txt")), "zip missing summary");
+  const bundleZip = await readZip(bundle);
+  assert(bundleZip.files.has("dataready-free-preview.csv"), "zip missing preview CSV");
+  assert(bundleZip.files.has("client-cleaning-report.pdf"), "zip missing PDF report");
+  assert(bundleZip.files.has("dataready-summary.txt"), "zip missing summary");
+  assert([...bundleZip.files.keys()].some((name) => name.endsWith("-original.csv")), "zip missing original CSV");
+  const workbookXml = await readZipText(workbook, "xl/workbook.xml");
+  assert(workbookXml.includes('name="Original Data"'), "workbook missing Original Data sheet");
 
   const previewLines = fs.readFileSync(preview, "utf8").split(/\r?\n/).filter(Boolean).length;
   assert(previewLines <= 101, `preview exported too many lines: ${previewLines}`);

@@ -1026,6 +1026,8 @@ async function savePendingPayment(sessionId) {
     rowCount: state.cleanRows.length,
     headers: state.cleanHeaders,
     rows: state.cleanRows,
+    rawHeaders: state.headers,
+    rawRows: state.rawRows,
     issues: state.issues,
     profiles: state.profiles,
     reviewNotes: state.reviewNotes,
@@ -1120,6 +1122,8 @@ function restoreStateFromPaidDownload(payload) {
   }
 
   state.fileName = payload.fileName || state.fileName || "Paid cleanup";
+  state.headers = Array.isArray(payload.rawHeaders) ? payload.rawHeaders : state.headers;
+  state.rawRows = Array.isArray(payload.rawRows) ? payload.rawRows : state.rawRows;
   state.issues = Array.isArray(payload.issues) ? payload.issues : [];
   state.profiles = Array.isArray(payload.profiles) ? payload.profiles : buildProfiles(state.cleanHeaders.map(() => "text"));
   state.reviewNotes = Array.isArray(payload.reviewNotes) ? payload.reviewNotes : [];
@@ -1152,6 +1156,7 @@ async function buildXlsxWorkbookBase64(fileName) {
 <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
 <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+<Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>`);
   zip.folder("_rels").file(".rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -1162,15 +1167,18 @@ async function buildXlsxWorkbookBase64(fileName) {
 <sheets>
 <sheet name="Clean Data" sheetId="1" r:id="rId1"/>
 <sheet name="Review Notes" sheetId="2" r:id="rId2"/>
+<sheet name="Original Data" sheetId="3" r:id="rId3"/>
 </sheets>
 </workbook>`);
   zip.folder("xl").folder("_rels").file("workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>
 </Relationships>`);
   zip.folder("xl").folder("worksheets").file("sheet1.xml", worksheetXml(state.cleanHeaders, state.cleanRows));
   zip.folder("xl").folder("worksheets").file("sheet2.xml", worksheetXml(["Row", "Field", "Issue", "Original Value"], reviewRows));
+  zip.folder("xl").folder("worksheets").file("sheet3.xml", worksheetXml(state.headers, state.rawRows));
   return zip.generateAsync({ type: "base64", compression: "DEFLATE" });
 }
 
@@ -1271,6 +1279,7 @@ async function downloadAllFiles() {
 
     zip.file("dataready-free-preview.csv", toCsv(state.cleanHeaders, getDeliverableRows()));
     zip.file("client-cleaning-report.pdf", buildPdfReport(), { binary: true });
+    zip.file(`${baseName}-original.csv`, toCsv(state.headers, state.rawRows));
     zip.file("dataready-summary.txt", els.summaryBox.textContent || state.paidDownload.summary || buildSummary());
 
     const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
@@ -1571,7 +1580,7 @@ async function restorePaidDownloadFromReturn() {
     restoreStateFromPaidDownload(pending);
     await removePendingPayment(sessionId);
     updatePaymentState("Payment verified. Your cleaned Excel workbook should download automatically. If it does not, click Download full Excel.");
-    updateSummary(`${pending.summary || buildSummary()}\n\nPayment verified.\nCleaned Excel workbook ready: ${pending.rowCount.toLocaleString()} rows.\nSheet 1: Clean Data. Sheet 2: Review Notes.\nYour download should start automatically. If it does not, click Download full Excel.`);
+    updateSummary(`${pending.summary || buildSummary()}\n\nPayment verified.\nCleaned Excel workbook ready: ${pending.rowCount.toLocaleString()} rows.\nSheet 1: Clean Data. Sheet 2: Review Notes. Sheet 3: Original Data.\nYour download should start automatically. If it does not, click Download full Excel.`);
     els.termsCheck.checked = true;
     enableDeliverables(true);
     setTimeout(downloadPaidFile, 300);
