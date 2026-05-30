@@ -6,6 +6,7 @@ const state = {
   cleanRows: [],
   removedDuplicates: 0,
   removedEmptyRows: 0,
+  removedStructureRows: 0,
   issues: [],
   profiles: [],
   reviewNotes: [],
@@ -169,17 +170,58 @@ function parseDelimited(text) {
   if (row.some((cell) => cell.trim() !== "")) rows.push(row);
   if (!rows.length) return { headers: [], rows: [] };
 
-  const width = Math.max(...rows.map((items) => items.length));
-  const headers = rows[0].map((header, index) => header.trim() || `Column ${index + 1}`);
+  return tableFromRows(rows);
+}
+
+function tableFromRows(rows) {
+  const nonEmptyRows = rows.filter((row) => row.some((cell) => String(cell).trim() !== ""));
+  if (!nonEmptyRows.length) return { headers: [], rows: [] };
+
+  const headerIndex = findLikelyHeaderRow(nonEmptyRows);
+  const tableRows = nonEmptyRows.slice(headerIndex);
+  const width = Math.max(...tableRows.map((items) => items.length));
+  const headers = tableRows[0].map((header, index) => String(header ?? "").trim() || `Column ${index + 1}`);
   while (headers.length < width) headers.push(`Column ${headers.length + 1}`);
 
-  const dataRows = rows.slice(1).map((items) => {
+  const dataRows = tableRows.slice(1).map((items) => {
     const padded = [...items];
     while (padded.length < width) padded.push("");
     return padded.slice(0, width);
   });
 
   return { headers, rows: dataRows };
+}
+
+function findLikelyHeaderRow(rows) {
+  let bestIndex = 0;
+  let bestScore = -Infinity;
+  rows.slice(0, 80).forEach((row, index) => {
+    const score = headerScore(row);
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
+function headerScore(row) {
+  const cells = row.map((cell) => String(cell ?? "").trim()).filter(Boolean);
+  if (!cells.length) return -100;
+  const normalized = cells.map((cell) => normalizeHeaderToken(cell));
+  const uniqueCount = new Set(normalized).size;
+  const knownCount = normalized.filter(isKnownHeaderToken).length;
+  const genericCount = normalized.filter((cell) => /^field [a-z]$|^column \d+$/.test(cell)).length;
+  const longNoteCount = normalized.filter((cell) => cell.length > 45 || /export|generated|subtotal|section|note only|do not import/.test(cell)).length;
+  return (knownCount * 8) + uniqueCount + Math.min(cells.length, 50) - (genericCount * 3) - (longNoteCount * 12);
+}
+
+function normalizeHeaderToken(value) {
+  return String(value ?? "").trim().toLowerCase().replace(/[_/-]+/g, " ").replace(/\s+/g, " ");
+}
+
+function isKnownHeaderToken(token) {
+  return /\b(lead|id|source|status|client|customer|name|spouse|buyer|seller|email|phone|contact|street|address|unit|city|state|zip|postal|county|neighborhood|mls|property|type|beds?|baths?|sq ?ft|square|lot|year|built|price|value|mortgage|balance|hoa|tax|insurance|goal|timeline|loan|preapproval|agent|date|follow|showing|offer|deadline|tags?|notes?|owner|duplicate)\b/.test(token);
 }
 
 function detectDelimiter(text) {
@@ -212,6 +254,7 @@ function loadParsedData(parsed, fileName = "Pasted data") {
   state.changeLog = [];
   state.removedDuplicates = 0;
   state.removedEmptyRows = 0;
+  state.removedStructureRows = 0;
   els.fileBadge.textContent = `${fileName} loaded`;
   setUploadStatus(`Loaded ${parsed.rows.length.toLocaleString()} rows from ${fileName}.`);
   els.cleanBtn.disabled = parsed.rows.length === 0;
@@ -299,20 +342,7 @@ function parseWorksheet(xml, sharedStrings) {
     return row.map((value) => value ?? "");
   });
 
-  const nonEmptyRows = rows.filter((row) => row.some((cell) => String(cell).trim() !== ""));
-  if (!nonEmptyRows.length) return { headers: [], rows: [] };
-
-  const width = Math.max(...nonEmptyRows.map((row) => row.length));
-  const headers = nonEmptyRows[0].map((header, index) => String(header).trim() || `Column ${index + 1}`);
-  while (headers.length < width) headers.push(`Column ${headers.length + 1}`);
-
-  const dataRows = nonEmptyRows.slice(1).map((row) => {
-    const padded = [...row];
-    while (padded.length < width) padded.push("");
-    return padded.slice(0, width);
-  });
-
-  return { headers, rows: dataRows };
+  return tableFromRows(rows);
 }
 
 function readCellValue(cell, sharedStrings) {
@@ -360,8 +390,31 @@ function cleanData() {
   const columnTypes = headers.map((header, index) => detectColumnType(header, state.rawRows.map((row) => row[index])));
   let rowRecords = state.rawRows.map((row, rowIndex) => ({
     originalRowNumber: rowIndex + 2,
+    originalRow: row,
     row: row.map((cell, index) => cleanCell(cell, columnTypes[index], rules, headers[index], rowIndex + 2)),
   }));
+
+  const beforeStructure = rowRecords.length;
+  rowRecords = rowRecords.filter((record) => {
+    const structural = classifyStructuralRow(record.originalRow, originalHeaders, headers);
+    if (!structural.remove) return true;
+    state.changeLog.push({
+      row: record.originalRowNumber,
+      column: "Entire row",
+      original: record.originalRow.map((cell) => String(cell ?? "").trim()).filter(Boolean).join(" | "),
+      cleaned: "(removed)",
+      action: structural.reason,
+    });
+    return false;
+  });
+  state.removedStructureRows = beforeStructure - rowRecords.length;
+  if (state.removedStructureRows) {
+    state.issues.push({
+      level: "warning",
+      title: "Structural rows removed",
+      detail: `${state.removedStructureRows.toLocaleString()} repeated header, note, subtotal, or section rows were removed before cleaning.`,
+    });
+  }
 
   if (rules.removeEmptyRows) {
     const before = rowRecords.length;
@@ -417,6 +470,52 @@ function cleanData() {
   renderActiveView();
   enableDeliverables(true);
   updateSummary(buildSummary());
+}
+
+function classifyStructuralRow(rawRow, originalHeaders, cleanHeaders) {
+  const cells = rawRow.map((cell) => String(cell ?? "").trim());
+  const nonEmpty = cells.filter(Boolean);
+  if (!nonEmpty.length) return { remove: true, reason: "Removed empty row" };
+
+  const rowText = nonEmpty.join(" ").toLowerCase();
+  if (/\b(batch totals below|do not import this row|subtotal \d+|rows in source tab|old tab:|end of export)\b/.test(rowText)) {
+    return { remove: true, reason: "Removed section or subtotal row" };
+  }
+  if (
+    nonEmpty.length <= 3 &&
+    /\b(export|generated|region break|section|subtotal|rows in source|end of export|old tab|raw .*dump|pasted section|do not import)\b/.test(rowText)
+  ) {
+    return { remove: true, reason: "Removed section or subtotal row" };
+  }
+
+  if (/^note only\b/i.test(nonEmpty[0]) || /^note:/i.test(nonEmpty[0])) {
+    return { remove: true, reason: "Removed note-only row" };
+  }
+
+  if (looksLikeRepeatedHeader(cells, originalHeaders) || looksLikeRepeatedHeader(cells, cleanHeaders)) {
+    return { remove: true, reason: "Removed repeated header row" };
+  }
+
+  const firstCell = String(cells[0] || "").toLowerCase();
+  if (/^(total|subtotal|grand total|batch total|rows in source|end of export)\b/.test(firstCell)) {
+    return { remove: true, reason: "Removed subtotal or footer row" };
+  }
+
+  return { remove: false, reason: "" };
+}
+
+function looksLikeRepeatedHeader(cells, headers) {
+  const normalizedHeaders = headers.map(normalizeHeaderToken);
+  let compared = 0;
+  let matches = 0;
+  cells.forEach((cell, index) => {
+    const normalized = normalizeHeaderToken(cell);
+    if (!normalized) return;
+    compared += 1;
+    if (normalized === normalizedHeaders[index] || normalizedHeaders.includes(normalized)) matches += 1;
+  });
+  if (compared < 4) return false;
+  return matches / compared >= 0.55;
 }
 
 function cleanCell(value, type, rules, header, rowNumber) {
@@ -531,6 +630,7 @@ function makeUniqueHeaders(headers) {
 
 function detectColumnType(header, values) {
   const name = header.toLowerCase();
+  if (/batch|import batch|owner|tags?|notes?|raw notes|duplicate hint/.test(name)) return "text";
   if (/\bid\b|customer id|client id|account id/.test(name)) return "id";
   if (/e-?mail/.test(name)) return "email";
   if (/phone|mobile|cell|tel/.test(name)) return "phone";
@@ -1053,6 +1153,7 @@ function buildSummary() {
     `Rows delivered: ${deliveredRows.length}`,
     `Total cleaned rows: ${state.cleanRows.length}`,
     `Columns delivered: ${state.cleanHeaders.length}`,
+    `Structural rows removed: ${state.removedStructureRows}`,
     `Empty rows removed: ${state.removedEmptyRows}`,
     `Duplicate rows removed: ${state.removedDuplicates}`,
     `Logged changes: ${state.changeLog.length}`,
