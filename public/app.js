@@ -1153,8 +1153,11 @@ async function restorePaidDownloadFromReturn() {
     if (!response.ok || !result.paid) throw new Error(result.error || "Payment was not verified yet.");
     state.paidDownload = pending;
     localStorage.removeItem(PENDING_PAYMENT_KEY);
-    updatePaymentState("Payment verified. Your full cleaned CSV is ready to download.");
-    updateSummary(`Payment verified.\nFull cleaned CSV ready: ${pending.rowCount.toLocaleString()} rows.\nClick Download full CSV.`);
+    updatePaymentState("Payment verified. Your full cleaned CSV should download automatically. If it does not, click Download full CSV.");
+    updateSummary(`Payment verified.\nFull cleaned CSV ready: ${pending.rowCount.toLocaleString()} rows.\nYour download should start automatically. If it does not, click Download full CSV.`);
+    setTimeout(() => {
+      downloadFile(`${pending.fileName || "dataready-full-cleaned"}-full.csv`, pending.csv, "text/csv;charset=utf-8");
+    }, 300);
     window.history.replaceState({}, "", window.location.pathname + window.location.hash);
   } catch (error) {
     updatePaymentState(`Payment check failed: ${error.message}`);
