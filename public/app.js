@@ -427,24 +427,44 @@ function cleanCell(value, type, rules, header, rowNumber) {
   };
 
   if (rules.trimCells) {
-    const trimmed = cell.replace(/\s+/g, " ").trim();
+    const trimmed = normalizeText(cell);
     addChange(cell, trimmed, "Trimmed spacing");
     cell = trimmed;
   }
 
   if (type === "email" && rules.formatEmails) {
-    const formatted = cell.toLowerCase();
-    addChange(cell, formatted, "Lowercased email");
+    const formatted = formatEmail(cell);
+    addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged invalid email" : "Lowercased email");
     cell = formatted;
   }
   if (type === "phone" && rules.formatPhones) {
     const formatted = formatPhone(cell);
-    addChange(cell, formatted, "Formatted phone");
+    addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged invalid phone" : "Formatted phone");
     cell = formatted;
   }
   if (type === "date" && rules.formatDates) {
     const formatted = formatDate(cell);
-    addChange(cell, formatted, "Standardized date");
+    addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged invalid date" : "Standardized date");
+    cell = formatted;
+  }
+  if (type === "money") {
+    const formatted = formatMoney(cell);
+    addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged invalid amount" : "Standardized amount");
+    cell = formatted;
+  }
+  if (type === "state") {
+    const formatted = formatState(cell);
+    addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged state" : "Standardized state");
+    cell = formatted;
+  }
+  if (type === "postal") {
+    const formatted = formatPostal(cell);
+    addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged postal code" : "Standardized postal code");
+    cell = formatted;
+  }
+  if (type === "url") {
+    const formatted = formatUrl(cell);
+    addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged invalid URL" : "Standardized URL");
     cell = formatted;
   }
   if (type === "name" && rules.formatNames) {
@@ -455,6 +475,11 @@ function cleanCell(value, type, rules, header, rowNumber) {
   if (type === "city" && rules.formatNames) {
     const formatted = titleCase(cell);
     addChange(cell, formatted, "Title-cased city");
+    cell = formatted;
+  }
+  if (type === "status" || type === "source") {
+    const formatted = titleCase(cell);
+    addChange(cell, formatted, "Standardized label");
     cell = formatted;
   }
 
@@ -483,11 +508,17 @@ function makeUniqueHeaders(headers) {
 
 function detectColumnType(header, values) {
   const name = header.toLowerCase();
+  if (/\bid\b|customer id|client id|account id/.test(name)) return "id";
   if (/e-?mail/.test(name)) return "email";
   if (/phone|mobile|cell|tel/.test(name)) return "phone";
   if (/date|dob|created|updated|signup/.test(name)) return "date";
   if (/name|contact|customer|client/.test(name)) return "name";
   if (/city|town/.test(name)) return "city";
+  if (/state|province|region/.test(name)) return "state";
+  if (/zip|postal/.test(name)) return "postal";
+  if (/url|website|link/.test(name)) return "url";
+  if (/status|stage/.test(name)) return "status";
+  if (/source|channel/.test(name)) return "source";
   if (/amount|price|total|cost|balance|revenue|paid|due/.test(name)) return "money";
 
   const filled = values.map((v) => String(v).trim()).filter(Boolean).slice(0, 50);
@@ -504,7 +535,8 @@ function detectColumnType(header, values) {
 function formatPhone(value) {
   const digits = digitsOnly(value);
   const normalized = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
-  if (normalized.length !== 10) return value;
+  if (!String(value).trim()) return "";
+  if (normalized.length !== 10) return reviewValue("Invalid phone", value);
   return `(${normalized.slice(0, 3)}) ${normalized.slice(3, 6)}-${normalized.slice(6)}`;
 }
 
@@ -516,22 +548,106 @@ function isEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value).trim());
 }
 
+function formatEmail(value) {
+  let email = String(value).trim().toLowerCase();
+  if (!email) return "";
+  email = email.replace(/\.con$/i, ".com");
+  return isEmail(email) ? email : reviewValue("Invalid email", value);
+}
+
 function parseDate(value) {
   const text = String(value).trim();
   if (!text) return null;
+  const iso = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (iso) return validLocalDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+
+  const slash = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2}|\d{4})$/);
+  if (slash) {
+    const year = Number(slash[3].length === 2 ? `20${slash[3]}` : slash[3]);
+    return validLocalDate(year, Number(slash[1]), Number(slash[2]));
+  }
+
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) return null;
   if (parsed.getFullYear() < 1900 || parsed.getFullYear() > 2100) return null;
   return parsed;
 }
 
+function validLocalDate(year, month, day) {
+  const parsed = new Date(year, month - 1, day);
+  if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) return null;
+  if (year < 1900 || year > 2100) return null;
+  return parsed;
+}
+
 function formatDate(value) {
+  if (!String(value).trim()) return "";
   const parsed = parseDate(value);
-  if (!parsed) return value;
+  if (!parsed) return reviewValue("Invalid date", value);
   const year = parsed.getFullYear();
   const month = String(parsed.getMonth() + 1).padStart(2, "0");
   const day = String(parsed.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function formatMoney(value) {
+  const text = String(value).trim();
+  if (!text) return "";
+  const negative = /^\(.+\)$/.test(text) || /^-/.test(text);
+  const cleaned = text.replace(/[,$]/g, "").replace(/^usd\s*/i, "").replace(/[()]/g, "").trim();
+  if (!cleaned || Number.isNaN(Number(cleaned))) return reviewValue("Invalid amount", value);
+  const amount = Math.abs(Number(cleaned));
+  return `${negative ? "-" : ""}${amount.toFixed(2)}`;
+}
+
+function formatState(value) {
+  const text = String(value).trim();
+  if (!text) return "";
+  const normalized = text.replace(/\./g, "").replace(/\s+/g, " ").toLowerCase();
+  const states = {
+    nm: "NM",
+    "new mexico": "NM",
+    nmx: "NM",
+    az: "AZ",
+    arizona: "AZ",
+    co: "CO",
+    colorado: "CO",
+    tx: "TX",
+    texas: "TX",
+  };
+  return states[normalized] || reviewValue("Check state", value);
+}
+
+function formatPostal(value) {
+  const text = String(value).trim();
+  if (!text) return "";
+  const digits = digitsOnly(text);
+  if (digits.length === 5) return digits;
+  if (digits.length === 9) return `${digits.slice(0, 5)}-${digits.slice(5)}`;
+  return reviewValue("Invalid postal code", value);
+}
+
+function formatUrl(value) {
+  const text = String(value).trim();
+  if (!text) return "";
+  try {
+    const url = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+    return url.toString();
+  } catch {
+    return reviewValue("Invalid URL", value);
+  }
+}
+
+function normalizeText(value) {
+  return String(value)
+    .replace(/[\uFFFD\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function reviewValue(reason, value) {
+  const text = normalizeText(value);
+  return text ? `REVIEW: ${reason} - ${text}` : "";
 }
 
 function titleCase(value) {
