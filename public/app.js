@@ -1108,10 +1108,34 @@ function escapeXml(value) {
 }
 
 function downloadBase64File(name, base64, type) {
+  if (!base64) throw new Error("The Excel workbook was not found in this browser session.");
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   downloadBlob(name, new Blob([bytes], { type }));
+}
+
+function downloadPaidFile() {
+  if (!state.paidDownload) return false;
+  const name = state.paidDownload.fileName || "dataready-cleaned";
+  try {
+    if (state.paidDownload.xlsxBase64) {
+      downloadBase64File(
+        `${name}-cleaned-workbook.xlsx`,
+        state.paidDownload.xlsxBase64,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      );
+    } else if (state.paidDownload.csv) {
+      downloadFile(`${name}-full.csv`, state.paidDownload.csv, "text/csv;charset=utf-8");
+    } else {
+      throw new Error("The cleaned file was not found in this browser session.");
+    }
+    return true;
+  } catch (error) {
+    updatePaymentState(`${error.message} Please re-upload the file and run checkout again in this same browser tab.`);
+    updateSummary(`Download problem: ${error.message}\nPlease re-upload the file, clean it again, and run checkout again.`);
+    return false;
+  }
 }
 
 function downloadFile(name, content, type) {
@@ -1346,11 +1370,7 @@ function reset() {
 
 async function startCheckout() {
   if (state.paidDownload) {
-    downloadBase64File(
-      `${state.paidDownload.fileName || "dataready-cleaned"}-cleaned-workbook.xlsx`,
-      state.paidDownload.xlsxBase64,
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    );
+    downloadPaidFile();
     return;
   }
 
@@ -1374,7 +1394,11 @@ async function startCheckout() {
     });
     const result = await response.json();
     if (!response.ok || !result.url || !result.sessionId) throw new Error(result.error || "Checkout is not ready yet.");
-    await savePendingPayment(result.sessionId);
+    try {
+      await savePendingPayment(result.sessionId);
+    } catch (error) {
+      throw new Error(`Could not prepare the cleaned file for download: ${error.message}`);
+    }
     window.location.href = result.url;
   } catch (error) {
     updatePaymentState(`${error.message} Add your Stripe secret key in Cloudflare to activate paid downloads.`);
@@ -1401,13 +1425,7 @@ async function restorePaidDownloadFromReturn() {
     localStorage.removeItem(PENDING_PAYMENT_KEY);
     updatePaymentState("Payment verified. Your cleaned Excel workbook should download automatically. If it does not, click Download full Excel.");
     updateSummary(`Payment verified.\nCleaned Excel workbook ready: ${pending.rowCount.toLocaleString()} rows.\nSheet 1: Clean Data. Sheet 2: Review Notes.\nYour download should start automatically. If it does not, click Download full Excel.`);
-    setTimeout(() => {
-      downloadBase64File(
-        `${pending.fileName || "dataready-cleaned"}-cleaned-workbook.xlsx`,
-        pending.xlsxBase64,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      );
-    }, 300);
+    setTimeout(downloadPaidFile, 300);
     window.history.replaceState({}, "", window.location.pathname + window.location.hash);
   } catch (error) {
     updatePaymentState(`Payment check failed: ${error.message}`);
