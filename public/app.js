@@ -210,15 +210,23 @@ function headerScore(row) {
   const cells = row.map((cell) => String(cell ?? "").trim()).filter(Boolean);
   if (!cells.length) return -100;
   const normalized = cells.map((cell) => normalizeHeaderToken(cell));
+  if (isGenericFieldHeaderRow(normalized)) return 85;
   const uniqueCount = new Set(normalized).size;
   const knownCount = normalized.filter(isKnownHeaderToken).length;
   const genericCount = normalized.filter((cell) => /^field [a-z]$|^column \d+$/.test(cell)).length;
   const longNoteCount = normalized.filter((cell) => cell.length > 45 || /export|generated|subtotal|section|note only|do not import/.test(cell)).length;
-  return (knownCount * 8) + uniqueCount + Math.min(cells.length, 50) - (genericCount * 3) - (longNoteCount * 12);
+  const dataLikeCount = normalized.filter((cell) => /^rl-\d+/.test(cell) || /^re-\d+/.test(cell) || /^c-\d+/.test(cell) || /phone:|email:|price |dates:|beds /.test(cell)).length;
+  return (knownCount * 8) + uniqueCount + Math.min(cells.length, 50) - (genericCount * 3) - (longNoteCount * 12) - (dataLikeCount * 20);
 }
 
 function normalizeHeaderToken(value) {
   return String(value ?? "").trim().toLowerCase().replace(/[_/-]+/g, " ").replace(/\s+/g, " ");
+}
+
+function isGenericFieldHeaderRow(tokens) {
+  const filled = tokens.filter(Boolean);
+  if (filled.length < 4) return false;
+  return filled.every((token, index) => token === `field ${String.fromCharCode(97 + index)}`);
 }
 
 function isKnownHeaderToken(token) {
@@ -371,7 +379,8 @@ function cleanData() {
   state.removedDuplicates = 0;
   state.removedEmptyRows = 0;
 
-  const originalHeaders = state.headers.map((header) => String(header ?? ""));
+  const prepared = prepareRowsForCleaning(state.headers, state.rawRows);
+  const originalHeaders = prepared.headers.map((header) => String(header ?? ""));
   const headers = rules.normalizeHeaders
     ? makeUniqueHeaders(originalHeaders.map((header, index) => {
         const normalized = normalizeHeader(header);
@@ -388,9 +397,9 @@ function cleanData() {
       }))
     : makeUniqueHeaders(originalHeaders.map((header) => header.trim() || "Column"));
 
-  const columnTypes = headers.map((header, index) => detectColumnType(header, state.rawRows.map((row) => row[index])));
-  let rowRecords = state.rawRows.map((row, rowIndex) => ({
-    originalRowNumber: rowIndex + 2,
+  const columnTypes = headers.map((header, index) => detectColumnType(header, prepared.rows.map((row) => row[index])));
+  let rowRecords = prepared.rows.map((row, rowIndex) => ({
+    originalRowNumber: prepared.rowNumbers[rowIndex] || rowIndex + 2,
     originalRow: row,
     row: row.map((cell, index) => cleanCell(cell, columnTypes[index], rules, headers[index], rowIndex + 2)),
   }));
@@ -471,6 +480,158 @@ function cleanData() {
   renderActiveView();
   enableDeliverables(true);
   updateSummary(buildSummary());
+}
+
+function prepareRowsForCleaning(headers, rows) {
+  if (!isLooseCrmDump(headers, rows)) {
+    return {
+      headers,
+      rows,
+      rowNumbers: rows.map((_, index) => index + 2),
+    };
+  }
+
+  const extractedHeaders = [
+    "Lead ID",
+    "Client Name",
+    "Phone",
+    "Email",
+    "Street Address",
+    "City",
+    "State",
+    "Zip",
+    "Beds",
+    "Baths",
+    "Sq Ft",
+    "List Price",
+    "Estimated Value",
+    "Mortgage Balance",
+    "Last Contacted",
+    "Next Follow Up",
+    "Showing Date",
+    "Client Goal",
+    "Agent",
+    "Tags",
+    "Raw Notes",
+    "Duplicate Hint",
+  ];
+
+  const extractedRows = [];
+  const rowNumbers = [];
+  rows.forEach((row, index) => {
+    const first = String(row[0] ?? "").trim();
+    if (!/^RL-\d+/i.test(first)) return;
+
+    const contact = extractContact(String(row[2] ?? ""));
+    const address = extractLooseAddress(String(row[3] ?? ""));
+    const property = extractPropertyStats(String(row[4] ?? ""));
+    const money = extractLooseMoney(String(row[5] ?? ""));
+    const dates = extractLooseDates(String(row[6] ?? ""));
+
+    extractedRows.push([
+      first,
+      row[1] || "",
+      contact.phone,
+      contact.email,
+      address.street,
+      address.city,
+      address.state,
+      address.zip,
+      property.beds,
+      property.baths,
+      property.sqft,
+      money.price,
+      money.estimated,
+      money.mortgage,
+      dates.last,
+      dates.next,
+      dates.showing,
+      row[7] || "",
+      row[8] || "",
+      row[9] || "",
+      row[10] || "",
+      row[11] || "",
+    ]);
+    rowNumbers.push(index + 2);
+  });
+
+  state.changeLog.push({
+    row: "Import",
+    column: "CRM dump",
+    original: "Loose CRM columns",
+    cleaned: "Structured lead columns",
+    action: "Extracted phone, email, address, property, price, and date fields",
+  });
+
+  return { headers: extractedHeaders, rows: extractedRows, rowNumbers };
+}
+
+function isLooseCrmDump(headers, rows) {
+  const tokens = headers.map(normalizeHeaderToken);
+  if (!isGenericFieldHeaderRow(tokens)) return false;
+  const sample = rows.slice(0, 80).map((row) => row.join(" ").toLowerCase()).join(" ");
+  return /phone:|email:|beds|sqft|price|dates:/.test(sample);
+}
+
+function extractContact(value) {
+  const text = String(value ?? "");
+  const emailMatch = text.match(/email:\s*([^/|]+)|([^\s/@]+@[^\s/@]+\.[^\s/@]+)/i);
+  const phoneMatch = text.match(/phone:\s*([^/|]+)/i);
+  return {
+    phone: phoneMatch ? phoneMatch[1].trim() : "",
+    email: emailMatch ? (emailMatch[1] || emailMatch[2] || "").trim() : "",
+  };
+}
+
+function extractLooseAddress(value) {
+  const text = normalizeText(value);
+  const zipMatch = text.match(/\b(\d{5})(?:-\d{4})?\b/);
+  const zip = zipMatch ? zipMatch[1] : "";
+  const beforeZip = zip ? text.slice(0, text.lastIndexOf(zip)).trim() : text;
+  const parts = beforeZip.split(",").map((part) => part.trim()).filter(Boolean);
+  const street = parts[0] || beforeZip;
+  const cityState = parts.slice(1).join(" ");
+  const stateMatch = cityState.match(/\b([A-Z]{2}|\?\?|New Mexico|N\.M\.)\b/i);
+  const state = stateMatch ? stateMatch[1] : "";
+  const city = state ? cityState.slice(0, cityState.toLowerCase().lastIndexOf(state.toLowerCase())).trim() : cityState;
+  return { street, city, state, zip };
+}
+
+function extractPropertyStats(value) {
+  const text = String(value ?? "");
+  return {
+    beds: text.match(/beds?\s+([^\s]+)/i)?.[1] || "",
+    baths: text.match(/baths?\s+([^\s]+)/i)?.[1] || "",
+    sqft: text.match(/sq\s*ft|sqft/i) ? text.replace(/^.*?sq\s*ft\s*/i, "").replace(/^.*?sqft\s*/i, "").trim() : "",
+  };
+}
+
+function extractLooseMoney(value) {
+  const text = String(value ?? "");
+  return {
+    price: sliceBetweenLooseLabels(text, "price", "est"),
+    estimated: sliceBetweenLooseLabels(text, "est", "mortgage"),
+    mortgage: sliceAfterLooseLabel(text, "mortgage"),
+  };
+}
+
+function extractLooseDates(value) {
+  const text = String(value ?? "");
+  return {
+    last: sliceBetweenLooseLabels(text, "last", "next"),
+    next: sliceBetweenLooseLabels(text, "next", "showing"),
+    showing: sliceAfterLooseLabel(text, "showing"),
+  };
+}
+
+function sliceBetweenLooseLabels(text, startLabel, endLabel) {
+  const pattern = new RegExp(`${startLabel}:?\\s*(.*?)\\s+${endLabel}:?\\s*`, "i");
+  return text.match(pattern)?.[1]?.trim() || "";
+}
+
+function sliceAfterLooseLabel(text, label) {
+  const pattern = new RegExp(`${label}:?\\s*(.*)$`, "i");
+  return text.match(pattern)?.[1]?.trim() || "";
 }
 
 function classifyStructuralRow(rawRow, originalHeaders, cleanHeaders) {
