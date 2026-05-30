@@ -455,9 +455,24 @@ function cleanCell(value, type, rules, header, rowNumber) {
     addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged invalid date" : "Standardized date");
     cell = formatted;
   }
+  if (type === "year") {
+    const formatted = formatYear(cell);
+    addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged invalid year" : "Standardized year");
+    cell = formatted;
+  }
   if (type === "money") {
     const formatted = formatMoney(cell);
     addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged invalid amount" : "Standardized amount");
+    cell = formatted;
+  }
+  if (type === "number") {
+    const formatted = formatNumber(cell);
+    addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged invalid number" : "Standardized number");
+    cell = formatted;
+  }
+  if (type === "percent") {
+    const formatted = formatPercent(cell);
+    addChange(cell, formatted, formatted.startsWith("REVIEW:") ? "Flagged invalid percent" : "Standardized percent");
     cell = formatted;
   }
   if (type === "state") {
@@ -519,7 +534,11 @@ function detectColumnType(header, values) {
   if (/\bid\b|customer id|client id|account id/.test(name)) return "id";
   if (/e-?mail/.test(name)) return "email";
   if (/phone|mobile|cell|tel/.test(name)) return "phone";
-  if (/date|dob|created|updated|signup/.test(name)) return "date";
+  if (/year built|\bbuilt\b/.test(name)) return "year";
+  if (/date|dob|created|updated|signup|contacted|follow up|follow-up|showing|deadline/.test(name)) return "date";
+  if (/commission|percent|pct|%/.test(name)) return "percent";
+  if (/amount|price|total|cost|balance|revenue|paid|due|value|hoa|preapproval|mortgage/.test(name)) return "money";
+  if (/beds?|baths?|sq ft|square feet|sqft|lot acres?|acres?/.test(name)) return "number";
   if (/name|contact|customer|client/.test(name)) return "name";
   if (/city|town/.test(name)) return "city";
   if (/state|province|region/.test(name)) return "state";
@@ -527,16 +546,19 @@ function detectColumnType(header, values) {
   if (/url|website|link/.test(name)) return "url";
   if (/status|stage/.test(name)) return "status";
   if (/source|channel/.test(name)) return "source";
-  if (/amount|price|total|cost|balance|revenue|paid|due/.test(name)) return "money";
 
   const filled = values.map((v) => String(v).trim()).filter(Boolean).slice(0, 50);
   if (!filled.length) return "text";
   const emailHits = filled.filter(isEmail).length / filled.length;
   const phoneHits = filled.filter((v) => digitsOnly(v).length >= 10).length / filled.length;
   const dateHits = filled.filter((v) => Boolean(parseDate(v))).length / filled.length;
+  const moneyHits = filled.filter((v) => Boolean(parseMoney(v))).length / filled.length;
+  const numberHits = filled.filter((v) => Boolean(parsePlainNumber(v))).length / filled.length;
   if (emailHits > 0.6) return "email";
   if (phoneHits > 0.6) return "phone";
   if (dateHits > 0.6) return "date";
+  if (moneyHits > 0.6) return "money";
+  if (numberHits > 0.8) return "number";
   return "text";
 }
 
@@ -601,11 +623,48 @@ function formatDate(value) {
 function formatMoney(value) {
   const text = String(value).trim();
   if (!text) return "";
+  const parsed = parseMoney(text);
+  if (!parsed) return reviewValue("Invalid amount", value);
+  return `${parsed.negative ? "-" : ""}${parsed.amount.toFixed(2)}`;
+}
+
+function parseMoney(value) {
+  const text = String(value).trim();
+  if (!text) return null;
   const negative = /^\(.+\)$/.test(text) || /^-/.test(text);
   const cleaned = text.replace(/[,$]/g, "").replace(/^usd\s*/i, "").replace(/[()]/g, "").trim();
-  if (!cleaned || Number.isNaN(Number(cleaned))) return reviewValue("Invalid amount", value);
+  if (!cleaned || Number.isNaN(Number(cleaned))) return null;
   const amount = Math.abs(Number(cleaned));
-  return `${negative ? "-" : ""}${amount.toFixed(2)}`;
+  return { amount, negative };
+}
+
+function formatNumber(value) {
+  if (!String(value).trim()) return "";
+  const parsed = parsePlainNumber(value);
+  if (parsed === null) return reviewValue("Invalid number", value);
+  return Number.isInteger(parsed) ? String(parsed) : String(parsed);
+}
+
+function parsePlainNumber(value) {
+  const text = String(value).trim().replace(/,/g, "");
+  if (!text || Number.isNaN(Number(text))) return null;
+  return Number(text);
+}
+
+function formatPercent(value) {
+  const text = String(value).trim();
+  if (!text) return "";
+  const cleaned = text.replace("%", "").trim();
+  if (!cleaned || Number.isNaN(Number(cleaned))) return reviewValue("Invalid percent", value);
+  return `${Number(cleaned).toFixed(2)}%`;
+}
+
+function formatYear(value) {
+  const text = String(value).trim();
+  if (!text) return "";
+  const year = Number(text);
+  if (!/^\d{4}$/.test(text) || !Number.isInteger(year) || year < 1700 || year > 2100) return reviewValue("Invalid year", value);
+  return String(year);
 }
 
 function formatState(value) {
@@ -738,6 +797,24 @@ function buildIssues(columnTypes) {
         state.issues.push({
           level: "warning",
           title: "Non-numeric amount",
+          detail: `Row ${rowIndex + 2}, ${header}: "${value}"`,
+        });
+      } else if (type === "number" && value && Number.isNaN(Number(value.replace(/,/g, "")))) {
+        state.issues.push({
+          level: "warning",
+          title: "Non-numeric value",
+          detail: `Row ${rowIndex + 2}, ${header}: "${value}"`,
+        });
+      } else if (type === "percent" && value && !/^-?\d+(\.\d+)?%$/.test(value)) {
+        state.issues.push({
+          level: "warning",
+          title: "Invalid percent",
+          detail: `Row ${rowIndex + 2}, ${header}: "${value}"`,
+        });
+      } else if (type === "year" && value && !/^\d{4}$/.test(value)) {
+        state.issues.push({
+          level: "warning",
+          title: "Invalid year",
           detail: `Row ${rowIndex + 2}, ${header}: "${value}"`,
         });
       }
