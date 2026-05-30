@@ -8,6 +8,7 @@ const state = {
   removedEmptyRows: 0,
   issues: [],
   profiles: [],
+  reviewNotes: [],
   changeLog: [],
   activeView: "table",
   paidDownload: null,
@@ -202,6 +203,7 @@ function loadParsedData(parsed, fileName = "Pasted data") {
   state.cleanRows = [];
   state.issues = [];
   state.profiles = [];
+  state.reviewNotes = [];
   state.changeLog = [];
   state.removedDuplicates = 0;
   state.removedEmptyRows = 0;
@@ -404,6 +406,7 @@ function cleanData() {
   state.cleanHeaders = headers;
   state.cleanRows = rowRecords.map((record) => record.row);
   buildIssues(columnTypes);
+  moveReviewMarkersToNotes();
   state.profiles = buildProfiles(columnTypes);
   updateMetrics();
   renderActiveView();
@@ -650,6 +653,44 @@ function reviewValue(reason, value) {
   return text ? `REVIEW: ${reason} - ${text}` : "";
 }
 
+function moveReviewMarkersToNotes() {
+  const cleanedRows = [];
+  let hasNotes = false;
+  state.reviewNotes = [];
+
+  state.cleanRows.forEach((row, rowIndex) => {
+    const cleanedRow = row.map((cell, columnIndex) => {
+      const text = String(cell ?? "");
+      const match = text.match(/^REVIEW:\s*([^-]+?)\s*-\s*(.*)$/);
+      if (!match) return cell;
+
+      hasNotes = true;
+      const field = state.cleanHeaders[columnIndex] || `Column ${columnIndex + 1}`;
+      const reason = match[1].trim();
+      const original = match[2].trim();
+      state.reviewNotes.push({
+        row: rowIndex + 2,
+        field,
+        issue: reason,
+        original,
+      });
+      return "";
+    });
+    cleanedRows.push(cleanedRow);
+  });
+
+  if (!hasNotes) return;
+
+  state.cleanRows = cleanedRows;
+  state.changeLog.push({
+    row: "All",
+    column: "Review notes",
+    original: "Inline review markers",
+    cleaned: "Moved to separate workbook sheet",
+    action: "Separated review notes",
+  });
+}
+
 function titleCase(value) {
   return String(value)
     .toLowerCase()
@@ -862,8 +903,8 @@ function updatePaymentState(message) {
 
   if (state.paidDownload) {
     els.fullFilePrice.textContent = "Payment verified";
-    els.fullFileStatus.textContent = message || `Your full cleaned CSV is ready: ${state.paidDownload.rowCount.toLocaleString()} rows.`;
-    els.unlockFullBtn.textContent = "Download full CSV";
+    els.fullFileStatus.textContent = message || `Your full cleaned Excel workbook is ready: ${state.paidDownload.rowCount.toLocaleString()} rows.`;
+    els.unlockFullBtn.textContent = "Download full Excel";
     els.unlockFullBtn.disabled = false;
     return;
   }
@@ -962,12 +1003,14 @@ function getDeliverableRows() {
   return state.cleanRows.slice(0, FREE_ROW_LIMIT);
 }
 
-function savePendingPayment(sessionId) {
+async function savePendingPayment(sessionId) {
+  const fileName = cleanFileName(state.fileName || "dataready-cleaned").replace(/\.(csv|xlsx|tsv|txt)$/i, "");
   const payload = {
     sessionId,
-    fileName: cleanFileName(state.fileName || "cleaned-data.csv").replace(/\.csv$/i, ""),
+    fileName,
     rowCount: state.cleanRows.length,
     csv: toCsv(state.cleanHeaders, state.cleanRows),
+    xlsxBase64: await buildXlsxWorkbookBase64(fileName),
     createdAt: Date.now(),
   };
   localStorage.setItem(PENDING_PAYMENT_KEY, JSON.stringify(payload));
@@ -991,8 +1034,91 @@ function cleanFileName(name) {
   return String(name || "cleaned-data").replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "cleaned-data";
 }
 
+async function buildXlsxWorkbookBase64(fileName) {
+  if (!window.JSZip) throw new Error("Excel export is not available. Refresh the app and try again.");
+  const zip = new JSZip();
+  const reviewRows = state.reviewNotes.length
+    ? state.reviewNotes.map((note) => [note.row, note.field, note.issue, note.original])
+    : [["", "", "No review notes", ""]];
+
+  zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>`);
+  zip.folder("_rels").file(".rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`);
+  zip.folder("xl").file("workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets>
+<sheet name="Clean Data" sheetId="1" r:id="rId1"/>
+<sheet name="Review Notes" sheetId="2" r:id="rId2"/>
+</sheets>
+</workbook>`);
+  zip.folder("xl").folder("_rels").file("workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+</Relationships>`);
+  zip.folder("xl").folder("worksheets").file("sheet1.xml", worksheetXml(state.cleanHeaders, state.cleanRows));
+  zip.folder("xl").folder("worksheets").file("sheet2.xml", worksheetXml(["Row", "Field", "Issue", "Original Value"], reviewRows));
+  return zip.generateAsync({ type: "base64", compression: "DEFLATE" });
+}
+
+function worksheetXml(headers, rows) {
+  const allRows = [headers, ...rows];
+  const sheetRows = allRows
+    .map((row, rowIndex) => {
+      const cells = row.map((value, columnIndex) => {
+        const ref = `${columnName(columnIndex + 1)}${rowIndex + 1}`;
+        return `<c r="${ref}" t="inlineStr"><is><t>${escapeXml(value)}</t></is></c>`;
+      }).join("");
+      return `<row r="${rowIndex + 1}">${cells}</row>`;
+    })
+    .join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+<sheetData>${sheetRows}</sheetData>
+</worksheet>`;
+}
+
+function columnName(index) {
+  let name = "";
+  while (index > 0) {
+    const mod = (index - 1) % 26;
+    name = String.fromCharCode(65 + mod) + name;
+    index = Math.floor((index - mod) / 26);
+  }
+  return name;
+}
+
+function escapeXml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function downloadBase64File(name, base64, type) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  downloadBlob(name, new Blob([bytes], { type }));
+}
+
 function downloadFile(name, content, type) {
-  const blob = new Blob([content], { type });
+  downloadBlob(name, new Blob([content], { type }));
+}
+
+function downloadBlob(name, blob) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -1220,7 +1346,11 @@ function reset() {
 
 async function startCheckout() {
   if (state.paidDownload) {
-    downloadFile(`${state.paidDownload.fileName || "dataready-full-cleaned"}-full.csv`, state.paidDownload.csv, "text/csv;charset=utf-8");
+    downloadBase64File(
+      `${state.paidDownload.fileName || "dataready-cleaned"}-cleaned-workbook.xlsx`,
+      state.paidDownload.xlsxBase64,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
     return;
   }
 
@@ -1244,7 +1374,7 @@ async function startCheckout() {
     });
     const result = await response.json();
     if (!response.ok || !result.url || !result.sessionId) throw new Error(result.error || "Checkout is not ready yet.");
-    savePendingPayment(result.sessionId);
+    await savePendingPayment(result.sessionId);
     window.location.href = result.url;
   } catch (error) {
     updatePaymentState(`${error.message} Add your Stripe secret key in Cloudflare to activate paid downloads.`);
@@ -1269,10 +1399,14 @@ async function restorePaidDownloadFromReturn() {
     if (!response.ok || !result.paid) throw new Error(result.error || "Payment was not verified yet.");
     state.paidDownload = pending;
     localStorage.removeItem(PENDING_PAYMENT_KEY);
-    updatePaymentState("Payment verified. Your full cleaned CSV should download automatically. If it does not, click Download full CSV.");
-    updateSummary(`Payment verified.\nFull cleaned CSV ready: ${pending.rowCount.toLocaleString()} rows.\nYour download should start automatically. If it does not, click Download full CSV.`);
+    updatePaymentState("Payment verified. Your cleaned Excel workbook should download automatically. If it does not, click Download full Excel.");
+    updateSummary(`Payment verified.\nCleaned Excel workbook ready: ${pending.rowCount.toLocaleString()} rows.\nSheet 1: Clean Data. Sheet 2: Review Notes.\nYour download should start automatically. If it does not, click Download full Excel.`);
     setTimeout(() => {
-      downloadFile(`${pending.fileName || "dataready-full-cleaned"}-full.csv`, pending.csv, "text/csv;charset=utf-8");
+      downloadBase64File(
+        `${pending.fileName || "dataready-cleaned"}-cleaned-workbook.xlsx`,
+        pending.xlsxBase64,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      );
     }, 300);
     window.history.replaceState({}, "", window.location.pathname + window.location.hash);
   } catch (error) {
