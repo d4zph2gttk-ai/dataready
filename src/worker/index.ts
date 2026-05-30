@@ -117,7 +117,7 @@ function withCheckoutSuccess(value: string) {
 	const url = new URL(value);
 	url.searchParams.set("checkout", "success");
 	url.searchParams.set("session_id", "{CHECKOUT_SESSION_ID}");
-	return url.toString();
+	return url.toString().replace("%7BCHECKOUT_SESSION_ID%7D", "{CHECKOUT_SESSION_ID}");
 }
 
 export default app;
