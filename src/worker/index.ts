@@ -10,7 +10,6 @@ const pricingTiers = {
 	single: { label: "DataReady Starter File", cents: 500, min: 101, max: 1000 },
 	large: { label: "DataReady Work File", cents: 1200, min: 1001, max: 10000 },
 	batch: { label: "DataReady Batch File", cents: 1900, min: 10001, max: 50000 },
-	enterprise: { label: "DataReady Human Review / Oversized File", cents: 4900, min: 50001, max: Number.POSITIVE_INFINITY },
 };
 
 app.get("/api/", (c) => c.json({ name: "DataReady API", checkout: "available when Stripe is configured" }));

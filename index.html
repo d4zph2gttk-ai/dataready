@@ -32,13 +32,15 @@
           <p>
             Upload a customer list, CRM export, roster, invoice table, or raw CSV.
             Fix spreadsheet formatting, remove duplicate rows, validate emails and
-            phone numbers, and download a clean CSV with a PDF audit report.
+            phone numbers, and download a clean CSV with a PDF audit report. DataReady
+            helps speed up cleanup, but important data should still be reviewed by a person.
           </p>
           <div class="hero-actions">
             <a class="primary-link" href="#load">Start cleaning</a>
           </div>
           <div class="trust-row" aria-label="Trust highlights">
             <span>Local processing</span>
+            <span>Data not saved</span>
             <span>Change log included</span>
             <span>Excel + CSV</span>
           </div>
@@ -118,6 +120,10 @@
             <button id="resetBtn" class="ghost-btn" type="button">Reset</button>
           </div>
           <p id="uploadStatus" class="upload-status" role="status">Ready for Excel, CSV, TSV, or pasted data.</p>
+          <div class="privacy-callout" role="note">
+            <strong>Your file stays on your device.</strong>
+            <span>DataReady processes files in your browser and does not save uploaded spreadsheets to our servers.</span>
+          </div>
 
           <div class="intake-grid">
             <label class="drop-zone" for="fileInput" id="dropZone">
@@ -262,7 +268,7 @@
               <li>Paid tiers are based on cleaned row count, not file type.</li>
             </ul>
           </div>
-          <p class="privacy-note">Files are processed locally in your browser and stay on this device.</p>
+          <p class="privacy-note">Files are processed locally in your browser and stay on this device. Uploaded data is not saved by DataReady.</p>
           <pre id="summaryBox" class="summary-box">No cleaned data yet.</pre>
         </section>
       </section>
@@ -288,17 +294,18 @@
           <h2>Before you clean an Excel or CSV file.</h2>
         </div>
         <div class="faq-grid">
-          <article><h3>Does this replace human review?</h3><p>No. It cleans obvious issues and flags risky rows for review.</p></article>
-          <article><h3>Do files leave my computer?</h3><p>Files are processed locally in the browser.</p></article>
+          <article><h3>Does this replace human review?</h3><p>No. DataReady is a time-saving cleanup tool. It helps standardize files and flag risky rows, but important data should still be verified by a human.</p></article>
+          <article><h3>Do you save uploaded data?</h3><p>No. Files are processed locally in your browser and are not saved by DataReady.</p></article>
           <article><h3>What files work best?</h3><p>Customer lists, CRM exports, contact lists, rosters, invoices, and raw CSV files.</p></article>
           <article><h3>What do I download?</h3><p>A cleaned CSV file and a PDF data-cleaning report with metrics, issues, and top changes.</p></article>
+          <article><h3>Can I send feedback?</h3><p>Yes. DataReady is actively improving, and customer suggestions help shape better cleanup rules for real-world files.</p></article>
         </div>
       </section>
     </main>
 
     <footer class="site-footer">
       <strong>DataReady</strong>
-      <span>Spreadsheet cleaning, validation, and client-ready reports.</span>
+      <span>Spreadsheet cleaning, validation, and client-ready reports. We are improving the cleaner over time and welcome customer feedback.</span>
     </footer>
 
     <script src="jszip.min.js"></script>

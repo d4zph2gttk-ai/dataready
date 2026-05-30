@@ -117,11 +117,12 @@ function pricingTier(rowCount) {
   const rows = Number(rowCount) || 0;
   return PRICING_TIERS.find((tier) => rows >= tier.min && rows <= tier.max) || {
     id: "enterprise",
-    label: "Custom Batch",
+    label: "Large File Review",
     min: 50001,
     max: Infinity,
-    price: 49,
-    cents: 4900,
+    price: null,
+    cents: null,
+    contactOnly: true,
   };
 }
 
@@ -732,7 +733,12 @@ function parseMoney(value) {
   const text = String(value).trim();
   if (!text) return null;
   const negative = /^\(.+\)$/.test(text) || /^-/.test(text);
-  const cleaned = text.replace(/[,$]/g, "").replace(/^usd\s*/i, "").replace(/[()]/g, "").trim();
+  const cleaned = text
+    .replace(/[,$]/g, "")
+    .replace(/^usd\s*/i, "")
+    .replace(/[()]/g, "")
+    .replace(/\b(approx|approximately|est|estimated|about|around|usd|dollars?)\b/gi, "")
+    .trim();
   if (!cleaned || Number.isNaN(Number(cleaned))) return null;
   const amount = Math.abs(Number(cleaned));
   return { amount, negative };
@@ -746,7 +752,11 @@ function formatNumber(value) {
 }
 
 function parsePlainNumber(value) {
-  const text = String(value).trim().replace(/,/g, "");
+  const text = String(value)
+    .trim()
+    .replace(/,/g, "")
+    .replace(/\b(sq\.?\s*ft\.?|sqft|square feet|acres?|approx|approximately|about|around)\b/gi, "")
+    .trim();
   if (!text || Number.isNaN(Number(text))) return null;
   return Number(text);
 }
@@ -1118,6 +1128,13 @@ function updatePaymentState(message) {
     els.unlockFullBtn.disabled = true;
     return;
   }
+  if (tier.contactOnly) {
+    els.fullFilePrice.textContent = "Large file quote";
+    els.fullFileStatus.textContent = `${rowCount.toLocaleString()} cleaned rows is over the self-serve checkout limit. This should be handled as a custom request, not the $49 human-review add-on.`;
+    els.unlockFullBtn.textContent = "Contact for large file";
+    els.unlockFullBtn.disabled = true;
+    return;
+  }
 
   els.fullFilePrice.textContent = `$${tier.price} ${tier.label}`;
   els.fullFileStatus.textContent = message || `${rowCount.toLocaleString()} cleaned rows. Free download is capped at ${FREE_ROW_LIMIT} rows; checkout unlocks the full cleaned CSV.`;
@@ -1166,7 +1183,7 @@ function buildSummary() {
       : "Full cleaned file included in this preview.",
     "",
     "Recommended client note:",
-    "I cleaned and standardized your file, removed duplicates/empty rows where selected, and flagged records that may need confirmation.",
+    "DataReady helped clean and standardize this file to save time. Please verify important records, totals, and flagged items before using the data for final decisions.",
   ].join("\n");
 }
 
@@ -1212,9 +1229,8 @@ async function savePendingPayment(sessionId) {
     changeLog: state.changeLog,
     removedDuplicates: state.removedDuplicates,
     removedEmptyRows: state.removedEmptyRows,
+    removedStructureRows: state.removedStructureRows,
     summary: buildSummary(),
-    csv: toCsv(state.cleanHeaders, state.cleanRows),
-    xlsxBase64: await buildXlsxWorkbookBase64(fileName),
     createdAt: Date.now(),
   };
   await savePendingPayload(payload);
@@ -1308,6 +1324,7 @@ function restoreStateFromPaidDownload(payload) {
   state.changeLog = Array.isArray(payload.changeLog) ? payload.changeLog : [];
   state.removedDuplicates = Number(payload.removedDuplicates || 0);
   state.removedEmptyRows = Number(payload.removedEmptyRows || 0);
+  state.removedStructureRows = Number(payload.removedStructureRows || 0);
   state.activeView = "table";
   els.fileBadge.textContent = `${state.fileName} paid`;
   setUploadStatus(`Payment verified. Restored ${state.cleanRows.length.toLocaleString()} cleaned rows.`);
@@ -1405,21 +1422,34 @@ function downloadBase64File(name, base64, type) {
   downloadBlob(name, new Blob([bytes], { type }));
 }
 
-function downloadPaidFile() {
+async function ensurePaidWorkbookBase64() {
+  if (state.paidDownload?.xlsxBase64) return state.paidDownload.xlsxBase64;
+  const baseName = cleanFileName(state.paidDownload?.fileName || state.fileName || "dataready-cleaned").replace(/\.(csv|xlsx|tsv|txt)$/i, "");
+  updatePaymentState("Building your Excel workbook now. Large files can take a little bit.");
+  const xlsxBase64 = await buildXlsxWorkbookBase64(baseName);
+  state.paidDownload.xlsxBase64 = xlsxBase64;
+  savePendingPayload(state.paidDownload).catch(() => {
+    // The file can still download even if the cached copy cannot be updated.
+  });
+  return xlsxBase64;
+}
+
+function paidCsv() {
+  if (state.paidDownload?.csv) return state.paidDownload.csv;
+  return toCsv(state.cleanHeaders, state.cleanRows);
+}
+
+async function downloadPaidFile() {
   if (!state.paidDownload) return false;
   const name = state.paidDownload.fileName || "dataready-cleaned";
   try {
-    if (state.paidDownload.xlsxBase64) {
-      downloadBase64File(
-        `${name}-cleaned-workbook.xlsx`,
-        state.paidDownload.xlsxBase64,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      );
-    } else if (state.paidDownload.csv) {
-      downloadFile(`${name}-full.csv`, state.paidDownload.csv, "text/csv;charset=utf-8");
-    } else {
-      throw new Error("The cleaned file was not found in this browser session.");
-    }
+    const xlsxBase64 = await ensurePaidWorkbookBase64();
+    downloadBase64File(
+      `${name}-cleaned-workbook.xlsx`,
+      xlsxBase64,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    updatePaymentState(`Your full cleaned Excel workbook is ready: ${state.paidDownload.rowCount.toLocaleString()} rows.`);
     return true;
   } catch (error) {
     updatePaymentState(`${error.message} Please re-upload the file and run checkout again in this same browser tab.`);
@@ -1443,17 +1473,9 @@ async function downloadAllFiles() {
   const zip = new JSZip();
 
   try {
-    if (state.paidDownload.xlsxBase64) {
-      zip.file(`${baseName}-cleaned-workbook.xlsx`, state.paidDownload.xlsxBase64, { base64: true });
-    } else if (state.paidDownload.csv) {
-      zip.file(`${baseName}-full.csv`, state.paidDownload.csv);
-    } else {
-      throw new Error("The paid cleaned file was not found in this browser session.");
-    }
-
-    if (state.paidDownload.csv) {
-      zip.file(`${baseName}-full.csv`, state.paidDownload.csv);
-    }
+    const xlsxBase64 = await ensurePaidWorkbookBase64();
+    zip.file(`${baseName}-cleaned-workbook.xlsx`, xlsxBase64, { base64: true });
+    zip.file(`${baseName}-full.csv`, paidCsv());
 
     zip.file("dataready-free-preview.csv", toCsv(state.cleanHeaders, getDeliverableRows()));
     zip.file("client-cleaning-report.pdf", buildPdfReport(), { binary: true });
@@ -1703,17 +1725,27 @@ function reset() {
 
 async function startCheckout() {
   if (state.paidDownload) {
-    downloadPaidFile();
+    await downloadPaidFile();
     return;
   }
 
   const rowCount = state.cleanRows.length;
   const tier = pricingTier(rowCount);
   if (!rowCount || tier.id === "preview") return;
+  if (tier.contactOnly) {
+    updatePaymentState("Large files over 50,000 rows should be quoted or requested by email instead of automatic checkout.");
+    return;
+  }
 
   els.unlockFullBtn.disabled = true;
-  els.unlockFullBtn.textContent = "Opening checkout...";
+  els.unlockFullBtn.textContent = "Preparing checkout...";
   try {
+    try {
+      await savePendingPayment(`pending-${Date.now()}`);
+    } catch (error) {
+      throw new Error(`Could not prepare the cleaned file for download: ${error.message}`);
+    }
+    els.unlockFullBtn.textContent = "Opening checkout...";
     const response = await fetch("/api/create-checkout-session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1728,7 +1760,9 @@ async function startCheckout() {
     const result = await response.json();
     if (!response.ok || !result.url || !result.sessionId) throw new Error(result.error || "Checkout is not ready yet.");
     try {
-      await savePendingPayment(result.sessionId);
+      const pending = await loadPendingPayment();
+      pending.sessionId = result.sessionId;
+      await savePendingPayload(pending);
     } catch (error) {
       throw new Error(`Could not prepare the cleaned file for download: ${error.message}`);
     }
@@ -1838,8 +1872,8 @@ els.downloadCleanBtn.addEventListener("click", () => {
 });
 
 els.downloadFullCsvBtn.addEventListener("click", () => {
-  if (state.paidDownload?.csv) {
-    downloadFile(`${state.paidDownload.fileName || "dataready-cleaned"}-full.csv`, state.paidDownload.csv, "text/csv;charset=utf-8");
+  if (state.paidDownload) {
+    downloadFile(`${state.paidDownload.fileName || "dataready-cleaned"}-full.csv`, paidCsv(), "text/csv;charset=utf-8");
   }
 });
 
