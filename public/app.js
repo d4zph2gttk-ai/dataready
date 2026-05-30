@@ -17,9 +17,9 @@ const state = {
 const FREE_ROW_LIMIT = 100;
 const PRICING_TIERS = [
   { id: "preview", label: "Preview", min: 0, max: 100, price: 0, cents: 0 },
-  { id: "single", label: "Single File", min: 101, max: 2500, price: 3, cents: 300 },
-  { id: "large", label: "Large File", min: 2501, max: 15000, price: 7, cents: 700 },
-  { id: "batch", label: "Batch", min: 15001, max: 50000, price: 12, cents: 1200 },
+  { id: "single", label: "Starter File", min: 101, max: 1000, price: 5, cents: 500 },
+  { id: "large", label: "Work File", min: 1001, max: 10000, price: 12, cents: 1200 },
+  { id: "batch", label: "Batch File", min: 10001, max: 50000, price: 19, cents: 1900 },
 ];
 
 const FILE_RULES = {
@@ -68,6 +68,7 @@ const els = {
   downloadCleanBtn: document.querySelector("#downloadCleanBtn"),
   downloadReportBtn: document.querySelector("#downloadReportBtn"),
   copySummaryBtn: document.querySelector("#copySummaryBtn"),
+  downloadFullCsvBtn: document.querySelector("#downloadFullCsvBtn"),
   unlockFullBtn: document.querySelector("#unlockFullBtn"),
   fullFilePrice: document.querySelector("#fullFilePrice"),
   fullFileStatus: document.querySelector("#fullFileStatus"),
@@ -891,10 +892,12 @@ function updateMetrics() {
 }
 
 function enableDeliverables(enabled) {
-  const canDownload = enabled && els.termsCheck.checked;
+  const canDownload = (enabled || Boolean(state.paidDownload)) && els.termsCheck.checked;
   els.downloadCleanBtn.disabled = !canDownload;
   els.downloadReportBtn.disabled = !canDownload;
   els.copySummaryBtn.disabled = !canDownload;
+  els.downloadFullCsvBtn.disabled = !state.paidDownload;
+  els.downloadFullCsvBtn.textContent = state.paidDownload ? "Download Full CSV" : "Download Full CSV";
   updatePaymentState();
 }
 
@@ -1425,6 +1428,8 @@ async function restorePaidDownloadFromReturn() {
     localStorage.removeItem(PENDING_PAYMENT_KEY);
     updatePaymentState("Payment verified. Your cleaned Excel workbook should download automatically. If it does not, click Download full Excel.");
     updateSummary(`Payment verified.\nCleaned Excel workbook ready: ${pending.rowCount.toLocaleString()} rows.\nSheet 1: Clean Data. Sheet 2: Review Notes.\nYour download should start automatically. If it does not, click Download full Excel.`);
+    els.termsCheck.checked = true;
+    enableDeliverables(true);
     setTimeout(downloadPaidFile, 300);
     window.history.replaceState({}, "", window.location.pathname + window.location.hash);
   } catch (error) {
@@ -1499,6 +1504,12 @@ document.querySelectorAll(".segmented button").forEach((button) => {
 
 els.downloadCleanBtn.addEventListener("click", () => {
   downloadFile("dataready-free-preview.csv", toCsv(state.cleanHeaders, getDeliverableRows()), "text/csv;charset=utf-8");
+});
+
+els.downloadFullCsvBtn.addEventListener("click", () => {
+  if (state.paidDownload?.csv) {
+    downloadFile(`${state.paidDownload.fileName || "dataready-cleaned"}-full.csv`, state.paidDownload.csv, "text/csv;charset=utf-8");
+  }
 });
 
 els.downloadReportBtn.addEventListener("click", () => {

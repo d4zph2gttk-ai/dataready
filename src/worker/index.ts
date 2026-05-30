@@ -7,9 +7,9 @@ type Bindings = Env & {
 const app = new Hono<{ Bindings: Bindings }>();
 
 const pricingTiers = {
-	single: { label: "DataReady Single File", cents: 300, min: 101, max: 2500 },
-	large: { label: "DataReady Large File", cents: 700, min: 2501, max: 15000 },
-	batch: { label: "DataReady Batch File", cents: 1200, min: 15001, max: 50000 },
+	single: { label: "DataReady Starter File", cents: 500, min: 101, max: 1000 },
+	large: { label: "DataReady Work File", cents: 1200, min: 1001, max: 10000 },
+	batch: { label: "DataReady Batch File", cents: 1900, min: 10001, max: 50000 },
 	enterprise: { label: "DataReady Human Review / Oversized File", cents: 4900, min: 50001, max: Number.POSITIVE_INFINITY },
 };
 
