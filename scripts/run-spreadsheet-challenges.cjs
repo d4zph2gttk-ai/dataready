@@ -21,7 +21,12 @@ function expectedForHeader(expected, header) {
 async function runOne(page, item) {
   await page.goto(APP_URL, { waitUntil: "domcontentloaded" });
   await page.setInputFiles("#fileInput", item.path);
-  await page.waitForSelector(".column-map-card select", { timeout: 60000 });
+  await page.waitForSelector(".advanced-detection", { timeout: 60000 });
+  await page.evaluate(() => {
+    const advanced = document.querySelector(".advanced-detection");
+    if (advanced) advanced.open = true;
+  });
+  await page.waitForSelector(".column-map-card select", { state: "attached", timeout: 60000 });
 
   const mapping = await page.evaluate(() =>
     [...document.querySelectorAll(".column-map-card")].map((card) => ({

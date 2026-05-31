@@ -258,10 +258,16 @@ function isKnownHeaderToken(token) {
 }
 
 function detectDelimiter(text) {
-  const firstLine = text.split(/\r?\n/).find((line) => line.trim()) || "";
-  const comma = (firstLine.match(/,/g) || []).length;
-  const tab = (firstLine.match(/\t/g) || []).length;
-  const pipe = (firstLine.match(/\|/g) || []).length;
+  const sampleLines = text.split(/\r?\n/).filter((line) => line.trim()).slice(0, 20);
+  const counts = sampleLines.reduce((total, line) => {
+    total.comma += (line.match(/,/g) || []).length;
+    total.tab += (line.match(/\t/g) || []).length;
+    total.pipe += (line.match(/\|/g) || []).length;
+    return total;
+  }, { comma: 0, tab: 0, pipe: 0 });
+  const comma = counts.comma;
+  const tab = counts.tab;
+  const pipe = counts.pipe;
   if (tab > comma && tab >= pipe) return "\t";
   if (pipe > comma) return "|";
   return ",";
@@ -1148,6 +1154,10 @@ function makeUniqueHeaders(headers) {
 
 function detectColumnType(header, values) {
   const name = header.toLowerCase();
+  const filled = values.map((v) => String(v).trim()).filter(Boolean).slice(0, 50);
+  if (/contact\s*(blob|info|details?)|contact blob/.test(name)) return "text";
+  if (/^contact$/.test(name) && filled.some((value) => /@|\b\d{3}[-.)\s]*\d{3}[-.\s]*\d{4}\b/.test(value))) return "text";
+  if (/gift info|donation detail|gift detail/.test(name)) return "text";
   if (/batch|import batch|owner|\btags?\b|\bnotes?\b|raw notes|duplicate hint/.test(name)) return "text";
   if (/unit cost|hourly rate|fee paid/.test(name)) return "money";
   if (/\bid\b|customer id|client id|account id|invoice\s*#|invoice number|claim\s*#|policy\s*#|loan\s*#|ticket\s*#|account\s*#|permit no|parcel|vehicle vin|\bvin\b|unit number|plate|confirmation code|work order|order\s*#|sku|account last 4|last 4|^unit$|job code/.test(name)) return "id";
@@ -1169,7 +1179,6 @@ function detectColumnType(header, values) {
   if (/url|website|link/.test(name)) return "url";
   if (/source|channel/.test(name)) return "source";
 
-  const filled = values.map((v) => String(v).trim()).filter(Boolean).slice(0, 50);
   if (!filled.length) return "text";
   const emailHits = filled.filter(isEmail).length / filled.length;
   const phoneHits = filled.filter((v) => digitsOnly(v).length >= 10).length / filled.length;

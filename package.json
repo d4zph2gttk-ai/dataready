@@ -48,6 +48,7 @@
 		"sample:challenges": "node scripts/generate-spreadsheet-challenges.cjs",
 		"qa:challenges": "node scripts/run-spreadsheet-challenges.cjs",
 		"qa:brutal-realtor": "node scripts/verify-brutal-realtor.cjs",
+		"qa:brutal-suite": "node scripts/verify-brutal-suite.cjs",
 		"qa:detection-ui": "node scripts/verify-detection-ui.cjs",
 		"qa:stacked-crm": "node scripts/verify-stacked-crm.cjs",
 		"stress": "node scripts/stress-dataready.cjs"
