@@ -688,6 +688,73 @@ textarea {
   margin: -6px 0 18px;
 }
 
+.detection-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.detection-card {
+  border: 1px solid var(--line);
+  background: #0d141f;
+  border-radius: 10px;
+  padding: 15px;
+  min-width: 0;
+}
+
+.detection-card.primary {
+  background: linear-gradient(135deg, rgba(47, 243, 180, 0.12), rgba(103, 199, 255, 0.06));
+  border-color: rgba(65, 230, 160, 0.26);
+}
+
+.detection-card span,
+.detection-card strong,
+.detection-card p {
+  display: block;
+}
+
+.detection-card span {
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.detection-card strong {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.detection-card p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.advanced-detection {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 0;
+}
+
+.advanced-detection summary {
+  cursor: pointer;
+  padding: 13px 15px;
+  font-weight: 900;
+}
+
+.advanced-detection > p {
+  margin: -2px 15px 14px;
+  color: var(--muted);
+}
+
+.advanced-detection .column-map-grid {
+  padding: 0 15px 15px;
+}
+
 .column-map-grid {
   grid-template-columns: repeat(3, minmax(220px, 1fr));
 }
@@ -1166,6 +1233,7 @@ button:disabled {
   }
 
   .rules-grid,
+  .detection-summary,
   .proof-strip,
   .pricing-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -1211,6 +1279,8 @@ button:disabled {
   .logo-strip,
   .rule-summary,
   .rules-grid,
+  .detection-summary,
+  .column-map-grid,
   .metric-strip,
   .health-grid,
   .preview-score,

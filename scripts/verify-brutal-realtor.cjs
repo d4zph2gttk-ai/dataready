@@ -1,4 +1,5 @@
 const { chromium } = require("playwright");
+const fs = require("fs");
 
 const url = process.env.DATAREADY_URL || "http://127.0.0.1:4186/";
 const filePath =
@@ -22,6 +23,14 @@ const filePath =
     const summary = document.querySelector("#summaryBox")?.innerText || "";
     return { headers, rows, summary };
   });
+
+  await page.check("#termsCheck");
+  const download = await Promise.all([
+    page.waitForEvent("download"),
+    page.click("#downloadCleanBtn"),
+  ]).then(([downloadEvent]) => downloadEvent);
+  const downloadPath = await download.path();
+  const downloadedCsv = fs.readFileSync(downloadPath, "utf8");
   await browser.close();
 
   const requiredHeaders = ["Lead Id", "Client Name", "Phone", "Email", "Street Address", "Beds", "List Price", "Raw Notes"];
@@ -29,11 +38,15 @@ const filePath =
   const firstRegularLead = result.rows.find((row) => row[0] === "RL-1000001");
   const hasContact = firstRegularLead?.includes("(505) 237-1053") && firstRegularLead?.includes("leah.garcia1@example.com");
   const hasPrice = firstRegularLead?.some((cell) => cell === "160917.00");
+  const downloadedHeader = downloadedCsv.split(/\r?\n/)[0] || "";
+  const downloadedHasStructuredHeader = downloadedHeader.includes("Lead Id,Client Name,Phone,Email,Street Address");
+  const downloadedHasContact = downloadedCsv.includes("(505) 237-1053") && downloadedCsv.includes("leah.garcia1@example.com");
+  const downloadedHasPrice = downloadedCsv.includes("160917.00");
 
-  if (missingHeaders.length || !hasContact || !hasPrice) {
-    console.error(JSON.stringify({ missingHeaders, firstRegularLead, result }, null, 2));
+  if (missingHeaders.length || !hasContact || !hasPrice || !downloadedHasStructuredHeader || !downloadedHasContact || !downloadedHasPrice) {
+    console.error(JSON.stringify({ missingHeaders, firstRegularLead, downloadedHeader, downloadedHasContact, downloadedHasPrice, result }, null, 2));
     throw new Error("Brutal realtor cleanup is still losing core contact or price information.");
   }
 
-  console.log(JSON.stringify({ firstRegularLead, result: { headers: result.headers, summary: result.summary } }, null, 2));
+  console.log(JSON.stringify({ firstRegularLead, downloadedHeader, result: { headers: result.headers, summary: result.summary } }, null, 2));
 })();

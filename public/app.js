@@ -59,6 +59,7 @@ const els = {
   loadSampleBtn: document.querySelector("#loadSampleBtn"),
   resetBtn: document.querySelector("#resetBtn"),
   cleanBtn: document.querySelector("#cleanBtn"),
+  columnMapSummary: document.querySelector("#columnMapSummary"),
   columnMapGrid: document.querySelector("#columnMapGrid"),
   rowMetric: document.querySelector("#rowMetric"),
   columnMetric: document.querySelector("#columnMetric"),
@@ -1037,16 +1038,21 @@ function cleanCell(value, type, rules, header, rowNumber) {
 }
 
 function renderColumnMapping() {
-  if (!els.columnMapGrid) return;
+  if (!els.columnMapGrid && !els.columnMapSummary) return;
   const prepared = prepareRowsForCleaning(state.headers, state.rawRows);
   if (!prepared.headers.length) {
-    els.columnMapGrid.innerHTML = `<div class="empty-state compact"><h3>No columns detected yet.</h3><p>Upload or paste data to review detected column types.</p></div>`;
+    if (els.columnMapSummary) {
+      els.columnMapSummary.innerHTML = `<div class="empty-state compact"><h3>No data loaded yet.</h3><p>Upload or paste data to see the detection summary.</p></div>`;
+    }
+    if (els.columnMapGrid) els.columnMapGrid.innerHTML = "";
     return;
   }
 
   const displayHeaders = prepared.headers.map((header) => normalizeHeader(header));
   const detected = displayHeaders.map((header, index) => detectColumnType(header, prepared.rows.map((row) => row[index])));
   state.detectedColumnTypes = detected;
+  renderDetectionSummary(displayHeaders, detected, prepared.rows.length);
+  if (!els.columnMapGrid) return;
   els.columnMapGrid.innerHTML = displayHeaders.map((header, index) => {
     const sample = sampleColumnValues(prepared.rows, index);
     const selected = state.columnTypeOverrides[index] || detected[index];
@@ -1072,6 +1078,46 @@ function renderColumnMapping() {
       }
     });
   });
+}
+
+function renderDetectionSummary(headers, detected, rowCount) {
+  if (!els.columnMapSummary) return;
+  const counts = detected.reduce((total, type) => {
+    total[type] = (total[type] || 0) + 1;
+    return total;
+  }, {});
+  const found = [
+    ["name", "Names"],
+    ["phone", "Phones"],
+    ["email", "Emails"],
+    ["date", "Dates"],
+    ["money", "Money"],
+    ["postal", "ZIP codes"],
+    ["city", "Cities"],
+    ["status", "Statuses"],
+  ].filter(([type]) => counts[type]);
+  const fileShape = isStackedCrmDump(state.headers, state.rawRows)
+    ? "Stacked CRM records detected"
+    : isLooseCrmDump(state.headers, state.rawRows)
+      ? "Loose realtor lead export detected"
+      : "Spreadsheet columns detected";
+  els.columnMapSummary.innerHTML = `
+    <div class="detection-card primary">
+      <span>File shape</span>
+      <strong>${escapeHtml(fileShape)}</strong>
+      <p>${rowCount.toLocaleString()} rows will be reviewed across ${headers.length.toLocaleString()} output fields.</p>
+    </div>
+    <div class="detection-card">
+      <span>Fields found</span>
+      <strong>${headers.slice(0, 6).map(escapeHtml).join(", ")}${headers.length > 6 ? ` + ${headers.length - 6} more` : ""}</strong>
+      <p>DataReady will keep original context in notes when it splits messy combined fields.</p>
+    </div>
+    <div class="detection-card">
+      <span>Detected data types</span>
+      <strong>${found.length ? found.map(([, label]) => label).join(", ") : "Text fields"}</strong>
+      <p>Open Advanced column review only if a label looks wrong.</p>
+    </div>
+  `;
 }
 
 function sampleColumnValues(rows, index) {

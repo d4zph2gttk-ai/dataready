@@ -152,18 +152,23 @@
           <div class="panel-heading">
             <div>
               <p class="eyebrow">2. Review Detection</p>
-              <h3>Confirm how each column should be cleaned.</h3>
+              <h3>Review what DataReady found.</h3>
             </div>
           </div>
           <p class="detection-help">
-            DataReady guesses the purpose of each column from the header and sample values. Change anything that looks wrong before cleaning.
+            DataReady looks for contacts, addresses, dates, amounts, notes, and messy multi-row records before cleaning.
           </p>
-          <div id="columnMapGrid" class="column-map-grid">
+          <div id="columnMapSummary" class="detection-summary">
             <div class="empty-state compact">
-              <h3>No columns detected yet.</h3>
-              <p>Upload or paste data to review detected column types.</p>
+              <h3>No data loaded yet.</h3>
+              <p>Upload or paste data to see the detection summary.</p>
             </div>
           </div>
+          <details class="advanced-detection">
+            <summary>Advanced column review</summary>
+            <p>Use this only if DataReady labels a field incorrectly.</p>
+            <div id="columnMapGrid" class="column-map-grid"></div>
+          </details>
         </section>
 
         <section id="clean" class="panel">
@@ -326,7 +331,7 @@
       <span>Spreadsheet cleaning, validation, and client-ready reports. We are improving the cleaner over time and welcome customer feedback.</span>
     </footer>
 
-    <script src="jszip.min.js"></script>
-    <script src="app.js"></script>
+    <script src="jszip.min.js?v=20260531-dataready"></script>
+    <script src="app.js?v=20260531-realtor-fix"></script>
   </body>
 </html>
