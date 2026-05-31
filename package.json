@@ -44,8 +44,11 @@
 		"lint": "eslint .",
 		"preview": "npm run build && vite preview",
 		"sample:chaos": "node scripts/generate-chaotic-realtor-data.cjs",
+		"sample:brutal": "node scripts/generate-brutal-raw-data.cjs",
 		"sample:challenges": "node scripts/generate-spreadsheet-challenges.cjs",
 		"qa:challenges": "node scripts/run-spreadsheet-challenges.cjs",
+		"qa:brutal-realtor": "node scripts/verify-brutal-realtor.cjs",
+		"qa:stacked-crm": "node scripts/verify-stacked-crm.cjs",
 		"stress": "node scripts/stress-dataready.cjs"
 	},
 	"type": "module"

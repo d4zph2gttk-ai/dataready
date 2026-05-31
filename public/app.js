@@ -249,7 +249,7 @@ function normalizeHeaderToken(value) {
 function isGenericFieldHeaderRow(tokens) {
   const filled = tokens.filter(Boolean);
   if (filled.length < 4) return false;
-  return filled.every((token, index) => token === `field ${String.fromCharCode(97 + index)}`);
+  return filled.every((token, index) => token === `field ${String.fromCharCode(97 + index)}` || /^column \d+$/.test(token));
 }
 
 function isKnownHeaderToken(token) {
@@ -537,6 +537,10 @@ function cleanData() {
 }
 
 function prepareRowsForCleaning(headers, rows, options = {}) {
+  if (isStackedCrmDump(headers, rows)) {
+    return prepareStackedCrmRows(headers, rows, options);
+  }
+
   if (!isLooseCrmDump(headers, rows)) {
     return {
       headers,
@@ -574,13 +578,30 @@ function prepareRowsForCleaning(headers, rows, options = {}) {
   const rowNumbers = [];
   rows.forEach((row, index) => {
     const first = String(row[0] ?? "").trim();
-    if (!/^RL-\d+/i.test(first)) return;
+    if (!/^(RL-\d+|REVIEW:\d+)/i.test(first)) return;
 
-    const contact = extractContact(String(row[2] ?? ""));
-    const address = extractLooseAddress(String(row[3] ?? ""));
-    const property = extractPropertyStats(String(row[4] ?? ""));
-    const money = extractLooseMoney(String(row[5] ?? ""));
-    const dates = extractLooseDates(String(row[6] ?? ""));
+    const cells = row.map((cell) => normalizeText(cell));
+    const contactIndex = cells.findIndex((cell) => /phone\s*:|email\s*:|[^\s/@]+@[^\s/@]+\.[^\s/@]+/i.test(cell));
+    const addressIndex = cells.findIndex((cell) => /\b\d{5}(?:-\d{4})?\b/.test(cell) && /\b(st|street|ave|blvd|rd|road|ln|dr|drive|loop|paseo|camino|canyon|airport|central|bridge|mesa|adobe|copper|yucca|lohman|unser|bosque|main)\b/i.test(cell));
+    const propertyIndex = cells.findIndex((cell) => /beds?\s+\S+|baths?\s+\S+|sq\s*ft|sqft/i.test(cell));
+    const moneyIndex = cells.findIndex((cell) => /\b(price|est|estimated|mortgage)\b/i.test(cell));
+    const datesIndex = cells.findIndex((cell) => /\b(dates?:|last\s+.+next|showing)\b/i.test(cell));
+
+    const contact = extractContact(contactIndex >= 0 ? cells[contactIndex] : "");
+    const address = extractLooseAddress(addressIndex >= 0 ? cells[addressIndex] : "");
+    const property = extractPropertyStats(propertyIndex >= 0 ? cells[propertyIndex] : "");
+    const money = extractLooseMoney(moneyIndex >= 0 ? cells[moneyIndex] : "");
+    const dates = extractLooseDates(datesIndex >= 0 ? cells[datesIndex] : "");
+    const goalIndex = datesIndex >= 0 ? datesIndex + 1 : 7;
+    const agentIndex = datesIndex >= 0 ? datesIndex + 2 : 8;
+    const tagsIndex = datesIndex >= 0 ? datesIndex + 3 : 9;
+    const duplicateIndex = cells.findIndex((cell) => /duplicate/i.test(cell));
+    const usedIndexes = new Set([0, 1, contactIndex, addressIndex, propertyIndex, moneyIndex, datesIndex, goalIndex, agentIndex, tagsIndex, duplicateIndex].filter((item) => item >= 0));
+    const rawNotes = cells
+      .map((cell, cellIndex) => ({ cell, cellIndex }))
+      .filter(({ cell, cellIndex }) => cell && !usedIndexes.has(cellIndex))
+      .map(({ cell }) => cell)
+      .join("; ");
 
     extractedRows.push([
       first,
@@ -600,11 +621,11 @@ function prepareRowsForCleaning(headers, rows, options = {}) {
       dates.last,
       dates.next,
       dates.showing,
-      row[7] || "",
-      row[8] || "",
-      row[9] || "",
-      row[10] || "",
-      row[11] || "",
+      cells[goalIndex] || "",
+      cells[agentIndex] || "",
+      cells[tagsIndex] || "",
+      rawNotes,
+      duplicateIndex >= 0 ? cells[duplicateIndex] : "",
     ]);
     rowNumbers.push(index + 2);
   });
@@ -622,11 +643,197 @@ function prepareRowsForCleaning(headers, rows, options = {}) {
   return { headers: extractedHeaders, rows: extractedRows, rowNumbers };
 }
 
+function prepareStackedCrmRows(headers, rows, options = {}) {
+  const extractedHeaders = [
+    "Lead ID",
+    "Client Name",
+    "Phone",
+    "Email",
+    "Source",
+    "Stage",
+    "Beds",
+    "Baths",
+    "City",
+    "Zip",
+    "Budget",
+    "Last Contacted",
+    "Agent",
+    "Raw Notes",
+    "Contact Issue",
+  ];
+
+  const extractedRows = [];
+  const rowNumbers = [];
+  let current = null;
+  const allRows = headerLooksLikeStackedCrmLead(headers) ? [headers, ...rows] : rows;
+
+  const flush = () => {
+    if (!current) return;
+    extractedRows.push([
+      current.id,
+      current.name,
+      current.phone,
+      current.email,
+      current.source,
+      current.stage,
+      current.beds,
+      current.baths,
+      current.city,
+      current.zip,
+      current.budget,
+      current.lastContacted,
+      current.agent,
+      [...new Set(current.notes.filter(Boolean))].join("; "),
+      current.contactIssue,
+    ]);
+    rowNumbers.push(current.rowNumber);
+  };
+
+  allRows.forEach((row, index) => {
+    const cells = row.map((cell) => normalizeText(cell));
+    const first = cells[0] || "";
+    const leadMatch = first.match(/^lead\s+(\d+)/i);
+
+    if (leadMatch) {
+      flush();
+      current = {
+        id: `LEAD-${leadMatch[1]}`,
+        name: "",
+        phone: "",
+        email: "",
+        source: "",
+        stage: "",
+        beds: "",
+        baths: "",
+        city: "",
+        zip: "",
+        budget: "",
+        lastContacted: "",
+        agent: "",
+        notes: [],
+        contactIssue: "",
+        rowNumber: index + 2,
+      };
+      applyStackedCrmCells(current, cells.slice(1));
+      return;
+    }
+
+    if (!current) return;
+    applyStackedCrmContinuation(current, cells);
+  });
+  flush();
+
+  if (options.log) {
+    state.changeLog.push({
+      row: "Import",
+      column: "Stacked CRM dump",
+      original: "One lead spread across multiple rows",
+      cleaned: "One structured row per lead",
+      action: "Merged contact, property, note, source, stage, and assignment rows",
+    });
+  }
+
+  return { headers: extractedHeaders, rows: extractedRows, rowNumbers };
+}
+
+function applyStackedCrmCells(record, cells) {
+  cells.forEach((cell) => {
+    if (!cell) return;
+    const name = cell.match(/^name\s*=\s*(.+)$/i)?.[1];
+    if (name) record.name = name;
+
+    const source = cell.match(/^source\s*[:=]\s*(.+)$/i)?.[1];
+    if (source) record.source = source;
+
+    const stage = cell.match(/^stage\s*[:=]?\s*(.+)$/i)?.[1];
+    if (stage) record.stage = stage;
+
+    const email = extractEmailFromText(cell);
+    if (email && !record.email) record.email = email;
+
+    const phone = extractPhoneFromText(cell);
+    if (phone && !record.phone) record.phone = phone;
+
+    if (/missing contact|no email|no phone/i.test(cell)) {
+      record.contactIssue = appendNote(record.contactIssue, cell);
+    }
+  });
+}
+
+function applyStackedCrmContinuation(record, cells) {
+  const rowText = cells.filter(Boolean).join(" | ");
+  if (!rowText) return;
+
+  if (/property wanted/i.test(rowText)) {
+    cells.forEach((cell) => {
+      const beds = cell.match(/(\d+)\s*beds?/i)?.[1];
+      const baths = cell.match(/(\d+)\s*baths?/i)?.[1];
+      const place = cell.match(/^([A-Za-z .'-]+)\s*\/\s*(\d{5})$/);
+      const budget = cell.match(/budget\s+(.+)$/i)?.[1];
+      if (beds) record.beds = beds;
+      if (baths) record.baths = baths;
+      if (place) {
+        record.city = normalizeText(place[1]);
+        record.zip = place[2];
+      }
+      if (budget) record.budget = budget;
+    });
+    return;
+  }
+
+  if (/last note/i.test(rowText)) {
+    cells.forEach((cell) => {
+      const called = cell.match(/called\s+(.+)$/i)?.[1];
+      const assigned = cell.match(/assigned\s+(.+)$/i)?.[1];
+      if (called) record.lastContacted = called;
+      if (assigned) record.agent = assigned;
+    });
+    record.notes.push(rowText.replace(/^last note\s*\|?\s*/i, ""));
+    return;
+  }
+
+  applyStackedCrmCells(record, cells);
+  record.notes.push(rowText);
+}
+
+function isStackedCrmDump(headers, rows) {
+  const tokens = headers.map(normalizeHeaderToken);
+  const genericFields = tokens.includes("record") && tokens.filter((token) => /^field \d+$/.test(token)).length >= 3;
+  const firstRowIsLead = headerLooksLikeStackedCrmLead(headers);
+  if (!genericFields && !firstRowIsLead) return false;
+  const sample = rows.slice(0, 120).map((row) => row.join(" ").toLowerCase()).join(" ");
+  const headerText = headers.join(" ").toLowerCase();
+  const combined = `${headerText} ${sample}`;
+  return /\blead\s+\d+\b/.test(combined) && /(name=|source:|property wanted|last note)/.test(combined);
+}
+
+function headerLooksLikeStackedCrmLead(headers) {
+  const text = headers.join(" ").toLowerCase();
+  return /^lead\s+\d+/i.test(String(headers[0] ?? "").trim()) && /(name=|source:|stage\s+)/.test(text);
+}
+
 function isLooseCrmDump(headers, rows) {
   const tokens = headers.map(normalizeHeaderToken);
   if (!isGenericFieldHeaderRow(tokens)) return false;
   const sample = rows.slice(0, 80).map((row) => row.join(" ").toLowerCase()).join(" ");
   return /phone:|email:|beds|sqft|price|dates:/.test(sample);
+}
+
+function appendNote(existing, note) {
+  return existing ? `${existing}; ${note}` : note;
+}
+
+function extractEmailFromText(value) {
+  const text = String(value ?? "");
+  const labeled = text.match(/email\s*[:=]?\s*([^\s|;]+@[^\s|;]+\.[^\s|;]+)/i)?.[1];
+  const plain = text.match(/[^\s/@|;]+@[^\s/@|;]+\.[^\s/@|;]+/i)?.[0];
+  return (labeled || plain || "").replace(/[),.]+$/, "");
+}
+
+function extractPhoneFromText(value) {
+  const text = String(value ?? "");
+  const phoneMatch = text.match(/(?:phone\s*[:=]?\s*)?(\+?1?\s*\(?505\)?[\s.-]*\d{3}[\s.-]*\d{4}(?:\s*ext\.?\s*\d+)?)|(\b505\d{7}\b)/i);
+  return normalizeText(phoneMatch?.[1] || phoneMatch?.[2] || "");
 }
 
 function extractContact(value) {
