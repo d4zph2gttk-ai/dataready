@@ -7,6 +7,9 @@ const state = {
   removedDuplicates: 0,
   removedEmptyRows: 0,
   removedStructureRows: 0,
+  removedRows: [],
+  detectedColumnTypes: [],
+  columnTypeOverrides: {},
   issues: [],
   profiles: [],
   reviewNotes: [],
@@ -56,6 +59,7 @@ const els = {
   loadSampleBtn: document.querySelector("#loadSampleBtn"),
   resetBtn: document.querySelector("#resetBtn"),
   cleanBtn: document.querySelector("#cleanBtn"),
+  columnMapGrid: document.querySelector("#columnMapGrid"),
   rowMetric: document.querySelector("#rowMetric"),
   columnMetric: document.querySelector("#columnMetric"),
   issueMetric: document.querySelector("#issueMetric"),
@@ -99,6 +103,25 @@ const ruleIds = [
   "formatEmails",
   "formatDates",
   "formatNames",
+];
+
+const COLUMN_TYPE_OPTIONS = [
+  ["text", "Text / leave as-is"],
+  ["id", "ID"],
+  ["name", "Name"],
+  ["email", "Email"],
+  ["phone", "Phone"],
+  ["date", "Date"],
+  ["money", "Money / amount"],
+  ["number", "Number"],
+  ["percent", "Percent"],
+  ["year", "Year"],
+  ["city", "City"],
+  ["state", "State"],
+  ["postal", "ZIP / postal"],
+  ["url", "URL"],
+  ["status", "Status"],
+  ["source", "Source"],
 ];
 
 function getRules() {
@@ -261,6 +284,9 @@ function loadParsedData(parsed, fileName = "Pasted data") {
   state.profiles = [];
   state.reviewNotes = [];
   state.changeLog = [];
+  state.removedRows = [];
+  state.detectedColumnTypes = [];
+  state.columnTypeOverrides = {};
   state.removedDuplicates = 0;
   state.removedEmptyRows = 0;
   state.removedStructureRows = 0;
@@ -272,6 +298,7 @@ function loadParsedData(parsed, fileName = "Pasted data") {
   updateMetrics();
   showEmptyPreview(false);
   renderRawPreview();
+  renderColumnMapping();
   updateSummary("Data loaded. Choose cleaning rules, then click Clean Data.");
 }
 
@@ -307,6 +334,8 @@ async function parseXlsx(file) {
     [...relsDoc.getElementsByTagNameNS("*", "Relationship")].map((rel) => [rel.getAttribute("Id"), rel.getAttribute("Target")]),
   );
 
+  let bestParsed = null;
+  let bestScore = -Infinity;
   for (const sheet of sheets) {
     const relId = sheet.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id") || sheet.getAttribute("r:id") || sheet.getAttribute("id");
     const target = relationships.get(relId);
@@ -315,9 +344,15 @@ async function parseXlsx(file) {
     const sheetXml = await zip.file(sheetPath)?.async("text");
     if (!sheetXml) continue;
     const parsed = parseWorksheet(sheetXml, sharedStrings);
-    if (parsed.headers.length && parsed.rows.length) return parsed;
+    if (!parsed.headers.length || !parsed.rows.length) continue;
+    const score = headerScore(parsed.headers) + Math.min(parsed.headers.length, 25) * 3 + Math.min(parsed.rows.length, 50);
+    if (score > bestScore) {
+      bestScore = score;
+      bestParsed = parsed;
+    }
   }
 
+  if (bestParsed) return bestParsed;
   throw new Error("No usable worksheet data was found in this Excel file.");
 }
 
@@ -378,8 +413,10 @@ function cleanData() {
   state.changeLog = [];
   state.removedDuplicates = 0;
   state.removedEmptyRows = 0;
+  state.removedStructureRows = 0;
+  state.removedRows = [];
 
-  const prepared = prepareRowsForCleaning(state.headers, state.rawRows);
+  const prepared = prepareRowsForCleaning(state.headers, state.rawRows, { log: true });
   const originalHeaders = prepared.headers.map((header) => String(header ?? ""));
   const headers = rules.normalizeHeaders
     ? makeUniqueHeaders(originalHeaders.map((header, index) => {
@@ -397,7 +434,9 @@ function cleanData() {
       }))
     : makeUniqueHeaders(originalHeaders.map((header) => header.trim() || "Column"));
 
-  const columnTypes = headers.map((header, index) => detectColumnType(header, prepared.rows.map((row) => row[index])));
+  const detectedTypes = headers.map((header, index) => detectColumnType(header, prepared.rows.map((row) => row[index])));
+  state.detectedColumnTypes = detectedTypes;
+  const columnTypes = detectedTypes.map((type, index) => state.columnTypeOverrides[index] || type);
   let rowRecords = prepared.rows.map((row, rowIndex) => ({
     originalRowNumber: prepared.rowNumbers[rowIndex] || rowIndex + 2,
     originalRow: row,
@@ -414,6 +453,11 @@ function cleanData() {
       original: record.originalRow.map((cell) => String(cell ?? "").trim()).filter(Boolean).join(" | "),
       cleaned: "(removed)",
       action: structural.reason,
+    });
+    state.removedRows.push({
+      row: record.originalRowNumber,
+      reason: structural.reason,
+      values: record.originalRow,
     });
     return false;
   });
@@ -437,6 +481,11 @@ function cleanData() {
           original: "(empty row)",
           cleaned: "(removed)",
           action: "Removed empty row",
+        });
+        state.removedRows.push({
+          row: record.originalRowNumber,
+          reason: "Removed empty row",
+          values: record.originalRow,
         });
       }
       return keep;
@@ -463,6 +512,11 @@ function cleanData() {
           cleaned: "(removed)",
           action: "Removed duplicate row",
         });
+        state.removedRows.push({
+          row: record.originalRowNumber,
+          reason: "Removed duplicate row",
+          values: record.originalRow,
+        });
       } else {
         seen.add(key);
         deduped.push(record);
@@ -482,7 +536,7 @@ function cleanData() {
   updateSummary(buildSummary());
 }
 
-function prepareRowsForCleaning(headers, rows) {
+function prepareRowsForCleaning(headers, rows, options = {}) {
   if (!isLooseCrmDump(headers, rows)) {
     return {
       headers,
@@ -555,13 +609,15 @@ function prepareRowsForCleaning(headers, rows) {
     rowNumbers.push(index + 2);
   });
 
-  state.changeLog.push({
-    row: "Import",
-    column: "CRM dump",
-    original: "Loose CRM columns",
-    cleaned: "Structured lead columns",
-    action: "Extracted phone, email, address, property, price, and date fields",
-  });
+  if (options.log) {
+    state.changeLog.push({
+      row: "Import",
+      column: "CRM dump",
+      original: "Loose CRM columns",
+      cleaned: "Structured lead columns",
+      action: "Extracted phone, email, address, property, price, and date fields",
+    });
+  }
 
   return { headers: extractedHeaders, rows: extractedRows, rowNumbers };
 }
@@ -773,6 +829,53 @@ function cleanCell(value, type, rules, header, rowNumber) {
   return cell;
 }
 
+function renderColumnMapping() {
+  if (!els.columnMapGrid) return;
+  const prepared = prepareRowsForCleaning(state.headers, state.rawRows);
+  if (!prepared.headers.length) {
+    els.columnMapGrid.innerHTML = `<div class="empty-state compact"><h3>No columns detected yet.</h3><p>Upload or paste data to review detected column types.</p></div>`;
+    return;
+  }
+
+  const displayHeaders = prepared.headers.map((header) => normalizeHeader(header));
+  const detected = displayHeaders.map((header, index) => detectColumnType(header, prepared.rows.map((row) => row[index])));
+  state.detectedColumnTypes = detected;
+  els.columnMapGrid.innerHTML = displayHeaders.map((header, index) => {
+    const sample = sampleColumnValues(prepared.rows, index);
+    const selected = state.columnTypeOverrides[index] || detected[index];
+    return `
+      <label class="column-map-card">
+        <strong title="${escapeHtml(header)}">${escapeHtml(header)}</strong>
+        <span>${escapeHtml(sample || "No sample values")}</span>
+        <select data-column-index="${index}" aria-label="Column type for ${escapeHtml(header)}">
+          ${COLUMN_TYPE_OPTIONS.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("")}
+        </select>
+      </label>
+    `;
+  }).join("");
+
+  els.columnMapGrid.querySelectorAll("select").forEach((select) => {
+    select.addEventListener("change", () => {
+      const index = Number(select.dataset.columnIndex);
+      const detectedType = state.detectedColumnTypes[index] || "text";
+      if (select.value === detectedType) {
+        delete state.columnTypeOverrides[index];
+      } else {
+        state.columnTypeOverrides[index] = select.value;
+      }
+    });
+  });
+}
+
+function sampleColumnValues(rows, index) {
+  return rows
+    .map((row) => String(row[index] ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" | ")
+    .slice(0, 120);
+}
+
 function normalizeHeader(header) {
   const cleaned = String(header)
     .trim()
@@ -792,21 +895,25 @@ function makeUniqueHeaders(headers) {
 
 function detectColumnType(header, values) {
   const name = header.toLowerCase();
-  if (/batch|import batch|owner|tags?|notes?|raw notes|duplicate hint/.test(name)) return "text";
-  if (/\bid\b|customer id|client id|account id/.test(name)) return "id";
+  if (/batch|import batch|owner|\btags?\b|\bnotes?\b|raw notes|duplicate hint/.test(name)) return "text";
+  if (/unit cost|hourly rate|fee paid/.test(name)) return "money";
+  if (/\bid\b|customer id|client id|account id|invoice\s*#|invoice number|claim\s*#|policy\s*#|loan\s*#|ticket\s*#|account\s*#|permit no|parcel|vehicle vin|\bvin\b|unit number|plate|confirmation code|work order|order\s*#|sku|account last 4|last 4|^unit$|job code/.test(name)) return "id";
   if (/e-?mail/.test(name)) return "email";
   if (/phone|mobile|cell|tel/.test(name)) return "phone";
   if (/year built|\bbuilt\b/.test(name)) return "year";
-  if (/date|dob|created|updated|signup|contacted|follow up|follow-up|showing|deadline/.test(name)) return "date";
-  if (/commission|percent|pct|%/.test(name)) return "percent";
-  if (/amount|price|total|cost|balance|revenue|paid|due|value|hoa|preapproval|mortgage/.test(name)) return "money";
-  if (/beds?|baths?|sq ft|square feet|sqft|lot acres?|acres?/.test(name)) return "number";
+  if (/commission|percent|pct|%|interest rate|\bltv\b|probability/.test(name)) return "percent";
+  if (/status|\bstage\b|paid\??|active\??|ticket type|category|priority|thanked|checked|check-in|loan status|loan stage|loan purpose|permit type|warranty claim|visit type|service type|room type|\bplan\b|\bgrade\b|recommend|needed|preferred role|department/.test(name)) return "status";
+  if (/date|dob|created|updated|signup|contacted|follow up|follow-up|showing|deadline|appointment|due by|arrival|departure|next service due/.test(name)) return "date";
+  if (/campaign/.test(name)) return "source";
+  if (/quantity|qty|reorder|count|stock|on hand|odometer|beds?|baths?|sq ft|square feet|sqft|lot acres?|acres?|labor hours?|labor hrs?|regular hours?|overtime hours?|\bhours?\b|\bhrs?\b|\bnights?\b|score|\bnps\b/.test(name)) return "number";
+  if (/amount|price|total|cost|balance|revenue|due|value|hoa|preapproval|mortgage|tax|subtotal|debit|credit|rate|pay/.test(name)) return "money";
+  if (/rep|attendee name|donor name|customer name|client name|full name|contact name|applicant|inspector|agent|provider|technician|manager|coordinator|supervisor|borrower|loan officer|assigned to/.test(name)) return "name";
+  if (/product name|description|merchant|vendor|company|memo/.test(name)) return "text";
   if (/name|contact|customer|client/.test(name)) return "name";
   if (/city|town/.test(name)) return "city";
   if (/state|province|region/.test(name)) return "state";
   if (/zip|postal/.test(name)) return "postal";
   if (/url|website|link/.test(name)) return "url";
-  if (/status|stage/.test(name)) return "status";
   if (/source|channel/.test(name)) return "source";
 
   const filled = values.map((v) => String(v).trim()).filter(Boolean).slice(0, 50);
@@ -850,6 +957,7 @@ function formatEmail(value) {
 function parseDate(value) {
   const text = String(value).trim();
   if (!text) return null;
+  if (/^-?\d+(\.\d+)?$/.test(text)) return null;
   const iso = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
   if (iso) return validLocalDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
 
@@ -1391,6 +1499,7 @@ async function savePendingPayment(sessionId) {
     removedDuplicates: state.removedDuplicates,
     removedEmptyRows: state.removedEmptyRows,
     removedStructureRows: state.removedStructureRows,
+    removedRows: state.removedRows,
     summary: buildSummary(),
     createdAt: Date.now(),
   };
@@ -1486,6 +1595,7 @@ function restoreStateFromPaidDownload(payload) {
   state.removedDuplicates = Number(payload.removedDuplicates || 0);
   state.removedEmptyRows = Number(payload.removedEmptyRows || 0);
   state.removedStructureRows = Number(payload.removedStructureRows || 0);
+  state.removedRows = Array.isArray(payload.removedRows) ? payload.removedRows : [];
   state.activeView = "table";
   els.fileBadge.textContent = `${state.fileName} paid`;
   setUploadStatus(`Payment verified. Restored ${state.cleanRows.length.toLocaleString()} cleaned rows.`);
@@ -1504,6 +1614,10 @@ async function buildXlsxWorkbookBase64(fileName) {
   const reviewRows = state.reviewNotes.length
     ? state.reviewNotes.map((note) => [note.row, note.field, note.issue, note.original])
     : [["", "", "No review notes", ""]];
+  const removedRows = state.removedRows.length
+    ? state.removedRows.map((entry) => [entry.row, entry.reason, ...(entry.values || [])])
+    : [["", "No removed rows"]];
+  const removedHeaders = ["Original Row", "Reason", ...state.headers.map((header) => String(header || "Column"))];
 
   zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -1513,6 +1627,7 @@ async function buildXlsxWorkbookBase64(fileName) {
 <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 <Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+<Override PartName="/xl/worksheets/sheet4.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>`);
   zip.folder("_rels").file(".rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -1524,6 +1639,7 @@ async function buildXlsxWorkbookBase64(fileName) {
 <sheet name="Clean Data" sheetId="1" r:id="rId1"/>
 <sheet name="Review Notes" sheetId="2" r:id="rId2"/>
 <sheet name="Original Data" sheetId="3" r:id="rId3"/>
+<sheet name="Removed Rows" sheetId="4" r:id="rId4"/>
 </sheets>
 </workbook>`);
   zip.folder("xl").folder("_rels").file("workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1531,10 +1647,12 @@ async function buildXlsxWorkbookBase64(fileName) {
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
 <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>
+<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet4.xml"/>
 </Relationships>`);
   zip.folder("xl").folder("worksheets").file("sheet1.xml", worksheetXml(state.cleanHeaders, state.cleanRows));
   zip.folder("xl").folder("worksheets").file("sheet2.xml", worksheetXml(["Row", "Field", "Issue", "Original Value"], reviewRows));
   zip.folder("xl").folder("worksheets").file("sheet3.xml", worksheetXml(state.headers, state.rawRows));
+  zip.folder("xl").folder("worksheets").file("sheet4.xml", worksheetXml(removedHeaders, removedRows));
   return zip.generateAsync({ type: "base64", compression: "DEFLATE" });
 }
 
@@ -1867,8 +1985,13 @@ function reset() {
   state.issues = [];
   state.profiles = [];
   state.changeLog = [];
+  state.reviewNotes = [];
+  state.removedRows = [];
+  state.detectedColumnTypes = [];
+  state.columnTypeOverrides = {};
   state.removedDuplicates = 0;
   state.removedEmptyRows = 0;
+  state.removedStructureRows = 0;
   state.paidDownload = null;
   els.fileInput.value = "";
   els.pasteInput.value = "";
@@ -1881,6 +2004,7 @@ function reset() {
   updatePaymentState();
   updateMetrics();
   showEmptyPreview(true);
+  renderColumnMapping();
   updateSummary("No cleaned data yet.");
 }
 

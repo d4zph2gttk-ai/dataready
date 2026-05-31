@@ -44,6 +44,8 @@
 		"lint": "eslint .",
 		"preview": "npm run build && vite preview",
 		"sample:chaos": "node scripts/generate-chaotic-realtor-data.cjs",
+		"sample:challenges": "node scripts/generate-spreadsheet-challenges.cjs",
+		"qa:challenges": "node scripts/run-spreadsheet-challenges.cjs",
 		"stress": "node scripts/stress-dataready.cjs"
 	},
 	"type": "module"

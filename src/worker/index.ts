@@ -15,11 +15,6 @@ const pricingTiers = {
 app.get("/api/", (c) => c.json({ name: "DataReady API", checkout: "available when Stripe is configured" }));
 
 app.post("/api/create-checkout-session", async (c) => {
-	const stripeKey = c.env.STRIPE_SECRET_KEY;
-	if (!stripeKey) {
-		return c.json({ error: "Stripe checkout is not configured yet." }, 501);
-	}
-
 	const body = await c.req.json().catch(() => null) as {
 		tierId?: keyof typeof pricingTiers;
 		rowCount?: number;
@@ -37,6 +32,11 @@ app.post("/api/create-checkout-session", async (c) => {
 	const tier = pricingTiers[tierId];
 	if (rowCount < tier.min || rowCount > tier.max) {
 		return c.json({ error: "The selected price tier does not match the file size." }, 400);
+	}
+
+	const stripeKey = c.env.STRIPE_SECRET_KEY;
+	if (!stripeKey) {
+		return c.json({ error: "Stripe checkout is not configured yet." }, 501);
 	}
 
 	const origin = new URL(c.req.url).origin;
@@ -57,14 +57,19 @@ app.post("/api/create-checkout-session", async (c) => {
 		"metadata[tier]": tierId,
 	});
 
-	const response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${stripeKey}`,
-			"Content-Type": "application/x-www-form-urlencoded",
-		},
-		body: params,
-	});
+	let response: Response;
+	try {
+		response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${stripeKey}`,
+				"Content-Type": "application/x-www-form-urlencoded",
+			},
+			body: params,
+		});
+	} catch {
+		return c.json({ error: "Stripe checkout is temporarily unavailable." }, 502);
+	}
 
 	const result = await response.json() as { id?: string; url?: string; error?: { message?: string } };
 	if (!response.ok || !result.url) {
@@ -85,9 +90,14 @@ app.get("/api/verify-checkout-session", async (c) => {
 		return c.json({ error: "Stripe checkout is not configured yet." }, 501);
 	}
 
-	const response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`, {
-		headers: { Authorization: `Bearer ${stripeKey}` },
-	});
+	let response: Response;
+	try {
+		response = await fetch(`https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`, {
+			headers: { Authorization: `Bearer ${stripeKey}` },
+		});
+	} catch {
+		return c.json({ error: "Stripe checkout verification is temporarily unavailable." }, 502);
+	}
 	const result = await response.json() as { payment_status?: string; status?: string; amount_total?: number; metadata?: Record<string, string>; error?: { message?: string } };
 	if (!response.ok) {
 		return c.json({ error: result.error?.message || "Stripe could not verify checkout." }, 502);

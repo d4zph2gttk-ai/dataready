@@ -179,8 +179,9 @@ async function paidUnlock(page) {
     return {
       rowCount: pending.rowCount,
       jsonBytes: JSON.stringify(pending).length,
-      csvBytes: pending.csv.length,
-      xlsxBytes: pending.xlsxBase64.length,
+      csvBytes: pending.csv?.length || 0,
+      xlsxBytes: pending.xlsxBase64?.length || 0,
+      hasDeferredWorkbook: !pending.xlsxBase64,
     };
   });
 }
@@ -239,8 +240,7 @@ async function runUnsupportedFileTest(page) {
 
 async function runApiSmoke(page) {
   await page.goto(APP_URL, { waitUntil: "domcontentloaded" });
-  return page.evaluate(async (appUrl) => {
-    const base = new URL(appUrl);
+  const result = await page.evaluate(async () => {
     const read = async (response) => {
       const text = await response.text();
       try {
@@ -249,15 +249,21 @@ async function runApiSmoke(page) {
         return { status: response.status, body: text.slice(0, 120), json: false };
       }
     };
-    const api = await fetch(new URL("/api/", base)).then(read);
-    const invalidCheckout = await fetch(new URL("/api/create-checkout-session", base), {
+    const api = await fetch("/api/").then(read);
+    const invalidCheckout = await fetch("/api/create-checkout-session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tierId: "single", rowCount: 50 }),
     }).then(read);
-    const invalidVerify = await fetch(new URL("/api/verify-checkout-session?session_id=cs_bad", base)).then(read);
+    const invalidVerify = await fetch("/api/verify-checkout-session?session_id=bad").then(read);
     return { api, invalidCheckout, invalidVerify };
-  }, APP_URL);
+  });
+  assert(result.api.status === 200, "API root did not return 200");
+  assert(result.invalidCheckout.status === 501 || result.invalidCheckout.status === 400, "invalid checkout did not return a controlled JSON response");
+  assert(result.invalidCheckout.body?.error, "invalid checkout response was not JSON");
+  assert(result.invalidVerify.status === 400, `invalid verify did not return a controlled JSON response: ${JSON.stringify(result.invalidVerify)}`);
+  assert(result.invalidVerify.body?.error, `invalid verify response was not JSON: ${JSON.stringify(result.invalidVerify)}`);
+  return result;
 }
 
 async function main() {
